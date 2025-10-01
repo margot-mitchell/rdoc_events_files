@@ -1,0 +1,5 @@
+include README.md
+include requirements.txt
+include LICENSE
+recursive-include rdoc_events_processor *.yaml *.yml
+recursive-include rdoc_events_processor *.py
