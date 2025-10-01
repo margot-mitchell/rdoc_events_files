@@ -10,10 +10,12 @@ __author__ = "Margot Mitchell"
 __email__ = "margot.mitchell@example.com"
 
 from .data_processing import EventFileProcessor
-from .utils import load_config, load_bids_data
+from .utils.config import load_config, load_default_config
+from .utils.data_loader import load_bids_data
 
 __all__ = [
     "EventFileProcessor",
     "load_config", 
+    "load_default_config",
     "load_bids_data",
 ]

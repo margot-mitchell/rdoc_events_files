@@ -78,15 +78,15 @@ processor = EventFileProcessor(config)
 
 # Process a single subject
 processor.process_subject_sessions(
-    input_dir='output_bids',
-    output_dir='rdoc_events_files', 
+    input_dir='dropbox_bids',
+    output_dir='output', 
     subject_id='s4'
 )
 ```
 
 ## Configuration
 
-The package uses YAML configuration files to define column mappings and processing options. See `src/event_columns_config.yaml` for an example configuration.
+The package uses YAML configuration files to define column mappings and processing options. The default configuration is included in the package at `rdoc_events_processor/configs/event_columns_config.yaml`.
 
 ### Configuration Structure
 

@@ -1,2 +1,0 @@
-rdoc_events_processor
-tests

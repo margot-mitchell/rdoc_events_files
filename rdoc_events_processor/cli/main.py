@@ -6,7 +6,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from ..utils.config import load_config
+from ..utils.config import load_config, load_default_config, get_config_path
 from ..data_processing import EventFileProcessor
 
 logger = logging.getLogger(__name__)
@@ -24,14 +24,14 @@ def setup_logging(verbose=False):
 def main():
     """Main function to run the CLI."""
     parser = argparse.ArgumentParser(description='Create event files from BIDS data')
-    parser.add_argument('--input-dir', '-i', default='output_bids',
-                       help='Input directory containing BIDS data (default: output_bids)')
-    parser.add_argument('--output-dir', '-o', default='rdoc_events_files',
-                       help='Output directory for event files (default: rdoc_events_files)')
+    parser.add_argument('--input-dir', '-i', default='dropbox_bids',
+                       help='Input directory containing BIDS data (default: dropbox_bids)')
+    parser.add_argument('--output-dir', '-o', default='output',
+                       help='Output directory for event files (default: output)')
     parser.add_argument('--subjects', '-s', nargs='+', 
                        help='List of subject IDs to process (e.g., s4 s5). If not specified, processes all subjects.')
-    parser.add_argument('--config', '-c', default='src/event_columns_config.yaml',
-                       help='Path to configuration file (default: src/event_columns_config.yaml)')
+    parser.add_argument('--config', '-c', default=None,
+                       help='Path to configuration file (default: use built-in config)')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Enable verbose logging')
     
@@ -41,10 +41,16 @@ def main():
     setup_logging(args.verbose)
     
     # Load configuration
-    config = load_config(args.config)
-    if config is None:
-        logger.error("Failed to load configuration. Exiting.")
-        return
+    if args.config is None:
+        config = load_default_config()
+        if config is None:
+            logger.error("Failed to load default configuration. Exiting.")
+            return
+    else:
+        config = load_config(args.config)
+        if config is None:
+            logger.error("Failed to load configuration. Exiting.")
+            return
     
     # Create output directory
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)

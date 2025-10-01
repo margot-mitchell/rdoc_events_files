@@ -1,0 +1,138 @@
+# Configuration file for event file column mapping
+# This file defines which columns from the BIDS data to include in the event files
+
+# Columns to include from the original BIDS data (applied to ALL tasks)
+# Format: "bids_column_name": "event_file_column_name"
+# Leave event_file_column_name empty to keep the same name as bids_column_name
+bids_columns:
+  "time_elapsed": "onset"
+  "stimulus_duration": "duration"
+  "trial_id": "trial_id"
+  "rt": "response_time"
+  "correct_trial": "acc"
+
+# Task-specific columns (only applied to their respective tasks)
+task_specific_columns:
+  # Flanker task
+  flanker:
+    "flanker": "flanker_condition"
+    "center_letter": "center_letter"
+    "correct_response": "correct_response"
+    "response": "key_press"
+    "condition": "trial_type"
+
+  # Spatial TS
+  spatialTS:
+    "whichQuadrant": "whichQuadrant"
+    "spatial_cue": "spatial_cue"
+    "shape": "shape"
+    "correct_response": "correct_response"
+    "response": "key_press"
+    "condition": "trial_type"
+
+
+
+  # Cued TS
+  cuedTS:
+    "cue": "cue"
+    "task": "task"
+    "task_condition": "task_condition"
+    "cue_condition": "cue_condition"
+    "stim_number": "stim_number"
+    "correct_response": "correct_response"
+    "response": "key_press"
+    "condition": "trial_type"
+
+
+  # Nback
+  nBack:
+    "delay": "delay"
+    "probe": "probe"
+    "letter_case": "letter_case"
+    "stimulus": "cue_letter"  # cue_letter missing from network_events_files, for rdoc will have to be parsed from link in stimulus column
+    "correct_response": "correct_response"
+    "response": "key_press"
+    "condition": "trial_type"
+
+  # Go Nogo
+  goNogo:
+    # Note: go_nogo_condition will have to be calculated and appended to rdoc columns
+    "correct_response": "correct_response"
+    "response": "key_press"
+    "condition": "trial_type"
+
+  # Stop Signal
+  stopSignal:
+    "SSD": "SSDelay"
+    "SS_duration": "SS_duration"
+    "stim": "stim"
+    "condition": "stop_signal_condition"
+    "correct_response": "correct_response"
+    "response": "key_press"
+    "condition": "trial_type"
+    # Note: stop_acc and go_acc are calculated and appended to rdoc columns
+
+  axCPT:
+    "cue_letter": "cue_letter"
+    "probe_letter": "probe_letter"
+    "correct_response": "correct_response"
+    "response": "key_press"
+    "condition": "trial_type"
+
+  spatialCueing:
+    "cue_location": "cue_location"
+    "stim_location": "stim_location"
+    "correct_response": "correct_response"
+    "response": "key_press"
+    "condition": "trial_type"
+
+  "visualSearch":
+    "target_present": "target_present"
+    "num_stimuli": "num_stimuli"
+    "order_and_color_of_rectangles": "order_and_color_of_rectangles"
+    "target_rectangle_location": "target_rectangle_location"
+    "correct_response": "correct_response"
+    "response": "key_press"
+    "condition": "trial_type"
+  
+  "opSpan":
+    "correct_spatial_judgement_key": "correct_spatial_response"
+    "correct_cell_order": "correct_navigation_response"
+    "valid_responses": "response"
+    "grid_symmetry": "grid_symmetry"
+    "order_and_color_of_processing_boxes": "order_and_color_of_processing_boxes"
+    "moving_through_grid_timetamps": "moving_through_grid_timetamps"
+    "cell_order_through_grid": "cell_order_through_grid"
+    "spatial_location": "spatial_location"
+    "starting_cell": "starting_cell"
+    "condition": "trial_type"
+
+  "opOnlySpan":
+    "correct_spatial_judgement_key": "correct_response"
+    "grid_symmetry": "trial_type"
+    "order_and_color_of_processing_boxes": "order_and_color_of_processing_boxes"
+    "response": "response"
+
+  "simpleSpan":
+    "spatial_location": "spatial_location"
+    "starting_cell": "starting_cell"
+    "correct_cell_order": "correct_response"
+    "moving_through_grid_timetamps": "moving_through_grid_timetamps"
+    "cell_order_through_grid": "cell_order_through_grid"
+    "valid_responses": "response"
+
+
+
+# Output format settings
+output_settings:
+  # File format for event files
+  file_format: "tsv"  # or "csv"
+  
+  # Separator for TSV files
+  separator: "\t"
+  
+  # Include header row
+  include_header: true
+  
+  # Float precision for numeric columns
+  float_precision: 6
