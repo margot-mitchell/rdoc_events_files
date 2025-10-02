@@ -276,3 +276,94 @@ class TestEventStructure:
                 error_msg += f"  {issue}\n"
             error_msg += "\nTrigger duration should be preserved from input to output"
             pytest.fail(error_msg)
+    
+    def test_column_ordering(self):
+        """
+        Test that all event files have columns in the correct order:
+        onset, duration, trial_type first, then all other columns alphabetically.
+        """
+        from pathlib import Path
+        
+        output_dir = Path("output")
+        event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
+        
+        if not event_files:
+            pytest.skip("No event files found in output directory")
+        
+        ordering_issues = []
+        
+        for file_path in event_files:
+            df = pd.read_csv(file_path, sep='\t')
+            columns = list(df.columns)
+            
+            # Define expected order
+            priority_columns = ['onset', 'duration', 'trial_type']
+            other_columns = sorted([col for col in columns if col not in priority_columns])
+            expected_order = [col for col in priority_columns if col in columns] + other_columns
+            
+            # Check if actual order matches expected order
+            if columns != expected_order:
+                ordering_issues.append({
+                    'file': str(file_path),
+                    'actual': columns,
+                    'expected': expected_order
+                })
+        
+        if ordering_issues:
+            error_msg = "Event files with incorrect column ordering:\n"
+            for issue in ordering_issues:
+                error_msg += f"  {issue['file']}:\n"
+                error_msg += f"    Actual: {issue['actual']}\n"
+                error_msg += f"    Expected: {issue['expected']}\n"
+            error_msg += "\nColumns should be ordered as: onset, duration, trial_type, then alphabetically"
+            pytest.fail(error_msg)
+    
+    def test_no_duplicate_onset_values(self):
+        """
+        Test that no event file has duplicate onset values.
+        Duplicate onset values can cause issues in fMRI analysis.
+        """
+        duplicate_issues = []
+        
+        # Get all output files
+        output_dir = Path(__file__).parent.parent / "output"
+        if not output_dir.exists():
+            pytest.skip("Output directory does not exist")
+        
+        output_files = list(output_dir.rglob("*.tsv"))
+        
+        for output_file in output_files:
+            try:
+                # Read the event file
+                df = pd.read_csv(output_file, sep='\t')
+                
+                if 'onset' not in df.columns:
+                    continue
+                
+                # Check for duplicate onset values
+                onset_counts = df['onset'].value_counts()
+                duplicates = onset_counts[onset_counts > 1]
+                
+                if len(duplicates) > 0:
+                    duplicate_issues.append({
+                        'file': output_file.name,
+                        'duplicates': len(duplicates),
+                        'examples': list(duplicates.head(5).items())
+                    })
+                    
+            except Exception as e:
+                duplicate_issues.append({
+                    'file': output_file.name,
+                    'error': str(e)
+                })
+        
+        if duplicate_issues:
+            error_msg = "Event files with duplicate onset values:\n"
+            for issue in duplicate_issues:
+                if 'error' in issue:
+                    error_msg += f"  {issue['file']}: Error - {issue['error']}\n"
+                else:
+                    error_msg += f"  {issue['file']}: {issue['duplicates']} duplicate onset values\n"
+                    error_msg += f"    Examples: {issue['examples']}\n"
+            error_msg += "\nDuplicate onset values can cause issues in fMRI analysis and should be resolved."
+            pytest.fail(error_msg)

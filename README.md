@@ -26,6 +26,17 @@ A Python package for downloading and processing behavioral data in csv format an
 
 ## Installation
 
+### Prerequisites
+
+For downloading data from Dropbox, you'll need:
+
+1. **rclone** - Install from [https://rclone.org/](https://rclone.org/)
+2. **rclone remote configured** - Set up your Dropbox remote:
+   ```bash
+   rclone config
+   # Follow prompts to create a Dropbox remote
+   ```
+
 ### From Source
 
 ```bash
@@ -44,7 +55,25 @@ pip install -e ".[dev]"
 
 ### Command Line Interface
 
-The package provides a command-line interface that can be used as follows:
+The package provides two command-line interfaces:
+
+#### 1. Download Data from Dropbox
+
+```bash
+# Download data for specific subjects
+rdoc-download --subjects s4 s5 s6
+
+# Specify custom remote path and local directory
+rdoc-download --subjects s4 s5 --remote-path "RDOC_fMRI_Events" --local-path "dropbox_bids"
+
+# Use custom rclone remote name
+rdoc-download --subjects s4 s5 --remote-name "my_dropbox"
+
+# Enable verbose output
+rdoc-download --subjects s4 s5 --verbose
+```
+
+#### 2. Process Downloaded Data
 
 ```bash
 # Process all subjects in the default directories
@@ -143,6 +172,19 @@ output_directory/
 └── sub-s05/
     └── ...
 ```
+
+### Column Ordering
+
+Event files follow a consistent column ordering:
+
+1. **Priority columns** (always first, in this order):
+   - `onset` - Event onset time in seconds
+   - `duration` - Event duration 
+   - `trial_type` - Trial condition
+
+2. **All other columns** - Sorted alphabetically
+
+This ensures consistent structure across all event files and makes them easier to work with programmatically.
 
 ## Development
 

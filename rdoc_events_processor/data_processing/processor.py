@@ -58,6 +58,14 @@ class EventFileProcessor:
             session_id (str): Session identifier
         """
         try:
+            # Filter out call-function events (internal JavaScript calls, not experimental events)
+            if 'trial_type' in data.columns:
+                initial_count = len(data)
+                data = data[data['trial_type'] != 'call-function']
+                filtered_count = initial_count - len(data)
+                if filtered_count > 0:
+                    logger.info(f"Filtered out {filtered_count} call-function events from input data")
+            
             # Get column mappings from config
             bids_columns = self.config.get('bids_columns', {})
             additional_columns = self.config.get('additional_columns', {})
@@ -286,8 +294,11 @@ class EventFileProcessor:
             if len(event_df) > 0 and 'trial_type' in event_df.columns:
                 event_df.iloc[-1, event_df.columns.get_loc('trial_type')] = 'exit_fullscreen'
             
-            # Reorder columns according to the specified order
-            event_df = reorder_columns(event_df)
+            # Reorder columns: onset, duration, trial_type first, then alphabetically
+            priority_columns = ['onset', 'duration', 'trial_type']
+            other_columns = sorted([col for col in event_df.columns if col not in priority_columns])
+            column_order = [col for col in priority_columns if col in event_df.columns] + other_columns
+            event_df = event_df[column_order]
             
             # Apply float precision if specified
             if 'float_precision' in output_settings:
