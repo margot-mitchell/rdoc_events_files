@@ -268,7 +268,7 @@ class EventFileProcessor:
                         logger.info(f"Removed {trigger_idx} rows before trigger start and normalized to trigger start (trigger onset: {trigger_onset:.3f}s)")
                     else:
                         # If no trigger found, this is an error since we should have skipped files without triggers
-                        raise ValueError(f"No 'fmri_wait_block_trigger_start' trial_id found in file {csv_file.name}. "
+                        raise ValueError(f"No 'fmri_wait_block_trigger_start' trial_id found in file {output_path.name}. "
                                        f"This file should have been skipped as it likely contains practice/prescan data.")
             
             # Replace all empty/null values with "n/a"
@@ -281,6 +281,10 @@ class EventFileProcessor:
             # Also handle case variations
             event_df = event_df.replace('NA', 'n/a')
             event_df = event_df.replace('Na', 'n/a')
+            
+            # Set trial_type to "exit_fullscreen" for the last row
+            if len(event_df) > 0 and 'trial_type' in event_df.columns:
+                event_df.iloc[-1, event_df.columns.get_loc('trial_type')] = 'exit_fullscreen'
             
             # Reorder columns according to the specified order
             event_df = reorder_columns(event_df)
