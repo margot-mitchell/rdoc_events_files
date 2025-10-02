@@ -30,8 +30,6 @@ task_specific_columns:
     "response": "key_press"
     "condition": "trial_type"
 
-
-
   # Cued TS
   cuedTS:
     "cue": "cue"
@@ -43,13 +41,11 @@ task_specific_columns:
     "response": "key_press"
     "condition": "trial_type"
 
-
   # Nback
   nBack:
     "delay": "delay"
-    "probe": "probe"
+    "probe": "current_letter"
     "letter_case": "letter_case"
-    "stimulus": "cue_letter"  # cue_letter missing from network_events_files, for rdoc will have to be parsed from link in stimulus column
     "correct_response": "correct_response"
     "response": "key_press"
     "condition": "trial_type"
@@ -94,32 +90,70 @@ task_specific_columns:
     "correct_response": "correct_response"
     "response": "key_press"
     "condition": "trial_type"
+
+  "stroop":
+    "condition": "trial_type"
+    "response": "key_press"
+    "stim_color": "stim_color"
+    "stim_word": "stim_word"
+    "correct_response": "correct_response"
   
   "opSpan":
-    "correct_spatial_judgement_key": "correct_spatial_response"
-    "correct_cell_order": "correct_navigation_response"
-    "valid_responses": "response"
+    "correct_spatial_judgement_key": "correct_response"
     "grid_symmetry": "grid_symmetry"
-    "order_and_color_of_processing_boxes": "order_and_color_of_processing_boxes"
-    "moving_through_grid_timetamps": "moving_through_grid_timetamps"
-    "cell_order_through_grid": "cell_order_through_grid"
     "spatial_location": "spatial_location"
     "starting_cell": "starting_cell"
     "condition": "trial_type"
+    "valid_responses_timestamps": "valid_responses_timestamps"  # needed for processing but dropped from output
+    "duplicate_responses_timestamps": "duplicate_responses_timestamps"  # needed for processing but dropped from output
+    "extra_responses_timestamps": "extra_responses_timestamps"  # needed for processing but dropped from output
+    "correct_navigation_response": "correct_navigation_response"  # needed for processing but dropped from output
+    "valid_responses": "valid_responses"  # needed for processing but dropped from output
+    "duplicate_responses": "duplicate_responses"  # needed for processing but dropped from output
+    "extra_responses": "extra_responses"  # needed for processing but dropped from output
+    "correct_cell_order": "correct_cell_order"  # needed for processing but dropped from output
 
   "opOnlySpan":
     "correct_spatial_judgement_key": "correct_response"
     "grid_symmetry": "trial_type"
-    "order_and_color_of_processing_boxes": "order_and_color_of_processing_boxes"
     "response": "response"
 
   "simpleSpan":
     "spatial_location": "spatial_location"
     "starting_cell": "starting_cell"
-    "correct_cell_order": "correct_response"
-    "moving_through_grid_timetamps": "moving_through_grid_timetamps"
-    "cell_order_through_grid": "cell_order_through_grid"
-    "valid_responses": "response"
+    "valid_responses": "valid_responses"  # unfurled and manipulated
+    "duplicate_responses": "duplicate_responses"  # unfurled and manipulated
+    "extra_responses": "extra_responses"  # unfurled and manipulated
+    "moving_through_grid_timestamps": "moving_through_grid_timestamps"  # unfurled and manipulated
+    "valid_responses_timestamps": "valid_responses_timestamps"  # unfurled and manipulated
+    "duplicate_responses_timestamps": "duplicate_responses_timestamps"  # unfurled and manipulated
+    "extra_responses_timestamps": "extra_responses_timestamps"  #  unfurled and manipulated
+    "correct_cell_order": "correct_cell"  # unfurled
+    "cell_order_through_grid": "cell_movement"  # unfurled and manipulated
+    "condition": "trial_type"
+    "response": "response"
+
+# Columns to exclude from specific tasks
+exclude_columns_by_task:
+  "opSpan":
+    - "extra_responses_timestamps"
+    - "duplicate_responses_timestamps"
+    - "valid_responses_timestamps"
+    - "extra_responses"
+    - "duplicate_responses"
+    - "valid_responses"
+    - "cell_order_through_grid"
+    - "moving_through_grid_timestamps"
+  
+  "simpleSpan":
+    - "extra_responses_timestamps"
+    - "duplicate_responses_timestamps"
+    - "valid_responses_timestamps"
+    - "extra_responses"
+    - "duplicate_responses"
+    - "valid_responses"
+    - "cell_order_through_grid"
+    - "moving_through_grid_timestamps"
 
 
 

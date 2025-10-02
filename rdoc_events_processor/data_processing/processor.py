@@ -15,6 +15,7 @@ from .calculators import (
     calculate_trial_type_stopSignal,
     calculate_go_nogo_condition
 )
+from .span_manipulators import process_span_data_for_events
 
 logger = logging.getLogger(__name__)
 
@@ -101,14 +102,143 @@ class EventFileProcessor:
             if task_name == 'goNogo':
                 event_data['go_nogo_condition'] = data.apply(calculate_go_nogo_condition, axis=1)
             
-            # Remove excluded columns
+            # Special processing for opOnlySpan task
+            # Calculate acc for rows where correct_trial is empty: if correct_response is not empty but response is n/a, make acc = 0.0
+            if task_name == 'opOnlySpan':
+                # Get the original correct_trial column from input data
+                original_correct_trial = data.get('correct_trial', pd.Series())
+                # Get correct_response and response columns from the processed event_data
+                correct_response = event_data.get('correct_response', pd.Series())
+                response = event_data.get('response', pd.Series())
+                
+                # Create new acc series starting with original correct_trial values
+                new_acc = original_correct_trial.copy()
+                
+                # For rows where correct_trial is empty/NaN but correct_response is not empty and response is n/a, set acc = 0.0
+                mask = (
+                    (original_correct_trial.isna() | (original_correct_trial == '') | (original_correct_trial == 'n/a')) &  # correct_trial is empty in input
+                    (correct_response.notna() & (correct_response != '') & (correct_response != 'n/a')) &  # correct_response is not empty
+                    (response.isna() | (response == '') | (response == 'n/a'))  # response is n/a
+                )
+                
+                new_acc.loc[mask] = 0.0
+                event_data['acc'] = new_acc
+            
+            # Special processing for nBack task
+            # Calculate letter_to_match based on 2-back reference with special delay logic
+            if task_name == 'nBack':
+                # Get current_letter and delay columns
+                current_letter = event_data.get('current_letter', pd.Series())
+                delay = data.get('delay', pd.Series())  # Get delay from original data
+                trial_type = event_data.get('trial_type', pd.Series())
+                
+                # Initialize letter_to_match column
+                letter_to_match = pd.Series(['n/a'] * len(current_letter), index=current_letter.index)
+                
+                # Create a list to track current_letter values for 2-back reference
+                letter_history = []
+                
+                for idx in range(len(current_letter)):
+                    letter_value = current_letter.iloc[idx]
+                    current_delay = delay.iloc[idx] if idx < len(delay) else None
+                    current_trial_type = trial_type.iloc[idx] if idx < len(trial_type) else None
+                    
+                    # Special case: starter_trial rows should always have letter_to_match = 'n/a'
+                    if current_trial_type == 'starter_trial':
+                        letter_to_match.iloc[idx] = 'n/a'
+                        # Add current letter to history but don't process further
+                        if (letter_value is not None and 
+                            letter_value != '' and 
+                            letter_value != 'n/a' and 
+                            not pd.isna(letter_value)):
+                            letter_history.append(letter_value)
+                        else:
+                            letter_history.append('n/a')
+                        continue
+                    
+                    # Check if current_letter is valid (not n/a/empty)
+                    if (letter_value is not None and 
+                        letter_value != '' and 
+                        letter_value != 'n/a' and 
+                        not pd.isna(letter_value)):
+                        
+                        # Find the nth most proximal valid letter above (where n = delay)
+                        # Filter out n/a letters from history to get only valid letters
+                        valid_letters = [letter for letter in letter_history if 
+                                       letter is not None and 
+                                       letter != '' and 
+                                       letter != 'n/a' and 
+                                       not pd.isna(letter)]
+                        
+                        # Special case: if both rows directly above have n/a for current_letter, 
+                        # letter_to_match should be n/a regardless of delay
+                        if len(letter_history) >= 2:
+                            letter_1_back = letter_history[-1]
+                            letter_2_back = letter_history[-2]
+                            if ((letter_1_back is None or letter_1_back == '' or letter_1_back == 'n/a' or pd.isna(letter_1_back)) and
+                                (letter_2_back is None or letter_2_back == '' or letter_2_back == 'n/a' or pd.isna(letter_2_back))):
+                                letter_to_match.iloc[idx] = 'n/a'
+                            else:
+                                # Normal logic for finding nth most proximal valid letter
+                                if current_delay == 1.0:
+                                    # For delay=1.0, get the 1st most proximal valid letter
+                                    if len(valid_letters) >= 1:
+                                        letter_to_match.iloc[idx] = valid_letters[-1]  # Most recent valid letter
+                                    else:
+                                        letter_to_match.iloc[idx] = 'n/a'
+                                elif current_delay == 2.0:
+                                    # For delay=2.0, get the 2nd most proximal valid letter
+                                    if len(valid_letters) >= 2:
+                                        letter_to_match.iloc[idx] = valid_letters[-2]  # Second most recent valid letter
+                                    else:
+                                        letter_to_match.iloc[idx] = 'n/a'
+                                else:
+                                    letter_to_match.iloc[idx] = 'n/a'
+                        else:
+                            # Not enough history, use normal logic
+                            if current_delay == 1.0:
+                                # For delay=1.0, get the 1st most proximal valid letter
+                                if len(valid_letters) >= 1:
+                                    letter_to_match.iloc[idx] = valid_letters[-1]  # Most recent valid letter
+                                else:
+                                    letter_to_match.iloc[idx] = 'n/a'
+                            elif current_delay == 2.0:
+                                # For delay=2.0, get the 2nd most proximal valid letter
+                                if len(valid_letters) >= 2:
+                                    letter_to_match.iloc[idx] = valid_letters[-2]  # Second most recent valid letter
+                                else:
+                                    letter_to_match.iloc[idx] = 'n/a'
+                            else:
+                                letter_to_match.iloc[idx] = 'n/a'
+                        
+                        # Add current letter to history
+                        letter_history.append(letter_value)
+                    else:
+                        # For n/a/empty letters, add to history but don't set letter_to_match
+                        letter_history.append('n/a')
+                
+                
+                event_data['letter_to_match'] = letter_to_match
+            
+            # Remove excluded columns (global)
             for col in exclude_columns:
                 event_data.pop(col, None)
             
             # Create DataFrame
             event_df = pd.DataFrame(event_data)
             
-            # Convert onset from milliseconds to seconds and normalize to start at 0
+            # Special processing for span tasks - expand list columns
+            if task_name in ['opSpan', 'simpleSpan']:
+                logger.info(f"Processing span task data for {task_name}")
+                event_df = process_span_data_for_events(event_df, task_name)
+            
+            # Remove task-specific excluded columns AFTER span processing
+            task_excluded_columns = self.config.get('exclude_columns_by_task', {}).get(task_name, [])
+            for col in task_excluded_columns:
+                if col in event_df.columns:
+                    event_df = event_df.drop(columns=[col])
+            
+            # Convert onset from milliseconds to seconds and normalize to trigger start
             if 'onset' in event_df.columns:
                 # Convert to numeric, handling any non-numeric values
                 onset_series = pd.to_numeric(event_df['onset'], errors='coerce')
@@ -118,13 +248,28 @@ class EventFileProcessor:
                     # Convert from milliseconds to seconds
                     onset_seconds = onset_series / 1000.0
                     
-                    # Find the first valid (non-NaN) onset value
-                    first_onset = onset_seconds.dropna().iloc[0] if not onset_seconds.dropna().empty else 0
+                    # Find the row where trial_id = "fmri_wait_block_trigger_start"
+                    trigger_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
                     
-                    # Subtract the first onset from all values (normalize to start at 0)
-                    event_df['onset'] = onset_seconds - first_onset
-                    
-                    logger.info(f"Converted onset from ms to seconds and normalized to start at 0 (first onset: {first_onset:.3f}s)")
+                    if trigger_row_mask.any():
+                        # Get the trigger row index
+                        trigger_idx = event_df[trigger_row_mask].index[0]
+                        
+                        # Remove all rows that occurred before the trigger row
+                        event_df = event_df.iloc[trigger_idx:].reset_index(drop=True)
+                        onset_seconds = onset_seconds.iloc[trigger_idx:].reset_index(drop=True)
+                        
+                        # Get the original onset value of the trigger row (now at index 0)
+                        trigger_onset = onset_seconds.iloc[0]
+                        
+                        # Subtract trigger onset from all values (normalize trigger to 0)
+                        event_df['onset'] = onset_seconds - trigger_onset
+                        
+                        logger.info(f"Removed {trigger_idx} rows before trigger start and normalized to trigger start (trigger onset: {trigger_onset:.3f}s)")
+                    else:
+                        # If no trigger found, this is an error since we should have skipped files without triggers
+                        raise ValueError(f"No 'fmri_wait_block_trigger_start' trial_id found in file {csv_file.name}. "
+                                       f"This file should have been skipped as it likely contains practice/prescan data.")
             
             # Replace all empty/null values with "n/a"
             event_df = event_df.fillna('n/a')
@@ -150,7 +295,7 @@ class EventFileProcessor:
             separator = output_settings.get('separator', '\t')
             include_header = output_settings.get('include_header', True)
             
-            event_df.to_csv(output_path, sep=separator, index=False, header=include_header)
+            event_df.to_csv(output_path, sep=separator, index=False, header=include_header, na_rep='n/a')
             logger.info(f"Created event file: {output_path}")
             
         except Exception as e:
@@ -197,6 +342,12 @@ class EventFileProcessor:
         for session_dir in subject_dir.iterdir():
             if session_dir.is_dir() and session_dir.name.startswith('ses-'):
                 session_id = session_dir.name.replace('ses-', '')
+                
+                # Skip anatomical sessions
+                if session_id == 'anat':
+                    logger.info(f"Skipping anatomical session: {session_dir}")
+                    continue
+                    
                 func_dir = session_dir / 'func'
                 
                 if func_dir.exists():
@@ -206,6 +357,16 @@ class EventFileProcessor:
                     
                     # Process each CSV file in the func directory
                     for csv_file in func_dir.glob('*.csv'):
+                        # Skip prescan files
+                        if 'prescan' in csv_file.name.lower():
+                            logger.info(f"Skipping prescan file: {csv_file}")
+                            continue
+                            
+                        # Skip practice files
+                        if 'practice' in csv_file.name.lower():
+                            logger.info(f"Skipping practice file: {csv_file}")
+                            continue
+                            
                         # Extract task name from filename
                         task_name = self.extract_task_name(csv_file.stem)
                         

@@ -1,6 +1,6 @@
 # RDOC Events Processor
 
-A Python package for processing BIDS format fMRI data and creating event files for RDOC fMRI. 
+A Python package for downloading and processing behavioral data in csv format and BIDS structure from the PoldrackLab Dropbox account to create event files for RDOC fMRI. 
 
 ## Features
 
