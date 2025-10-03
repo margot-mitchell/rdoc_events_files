@@ -48,7 +48,7 @@ def calculate_stop_accuracy(row):
         row: DataFrame row with SS_trial_type and correct_trial columns from BIDS data
         
     Returns:
-        str: 'n/a' if go trial, '1' or '0' based on correct_trial if stop trial
+        float or str: 'n/a' if go trial, 1.0 or 0.0 based on correct_trial if stop trial
     """
     trial_type = row.get('SS_trial_type', '')
     if pd.isna(trial_type) or trial_type == '':
@@ -60,7 +60,7 @@ def calculate_stop_accuracy(row):
         correct = row.get('correct_trial', None)
         if pd.isna(correct):
             return ''
-        return '1' if correct == 1.0 else '0'
+        return 1.0 if correct == 1.0 else 0.0
     return ''
 
 
@@ -72,7 +72,7 @@ def calculate_go_accuracy(row):
         row: DataFrame row with SS_trial_type and correct_trial columns from BIDS data
         
     Returns:
-        str: 'n/a' if stop trial, '1' or '0' based on correct_trial if go trial
+        float or str: 'n/a' if stop trial, 1.0 or 0.0 based on correct_trial if go trial
     """
     trial_type = row.get('SS_trial_type', '')
     if pd.isna(trial_type) or trial_type == '':
@@ -84,7 +84,7 @@ def calculate_go_accuracy(row):
         correct = row.get('correct_trial', None)
         if pd.isna(correct):
             return ''
-        return '1' if correct == 1.0 else '0'
+        return 1.0 if correct == 1.0 else 0.0
     return ''
 
 

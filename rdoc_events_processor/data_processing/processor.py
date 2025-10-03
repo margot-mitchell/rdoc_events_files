@@ -104,6 +104,17 @@ class EventFileProcessor:
                 event_data['trial_type'] = data.apply(calculate_trial_type_stopSignal, axis=1)
                 event_data['stop_accuracy'] = data.apply(calculate_stop_accuracy, axis=1)
                 event_data['go_accuracy'] = data.apply(calculate_go_accuracy, axis=1)
+                
+                # Set correct_response to "n/a" for stop trials (stop_failure and stop_success)
+                trial_type_series = event_data['trial_type']
+                correct_response_series = event_data.get('correct_response', pd.Series())
+                
+                # Create mask for stop trials
+                stop_trial_mask = trial_type_series.isin(['stop_failure', 'stop_success'])
+                
+                # Set correct_response to "n/a" for stop trials
+                correct_response_series.loc[stop_trial_mask] = 'n/a'
+                event_data['correct_response'] = correct_response_series
             
             # Special processing for goNogo task
             # Calculate go_nogo_condition from the ORIGINAL BIDS data
@@ -131,6 +142,17 @@ class EventFileProcessor:
                 
                 new_acc.loc[mask] = 0.0
                 event_data['acc'] = new_acc
+            
+            # Special processing for simpleSpan task
+            # Calculate accuracy based on valid_cell_selection, invalid_cell_selection, and correct_cell
+            if task_name == 'simpleSpan':
+                # Get the original correct_trial column from input data
+                original_correct_trial = data.get('correct_trial', pd.Series())
+                # Create new acc series starting with original correct_trial values
+                new_acc = original_correct_trial.copy()
+                
+                # After span processing, we'll calculate accuracy based on the expanded data
+                # This will be handled after span processing in the processor
             
             # Special processing for nBack task
             # Calculate letter_to_match based on 2-back reference with special delay logic
@@ -240,6 +262,46 @@ class EventFileProcessor:
                 logger.info(f"Processing span task data for {task_name}")
                 event_df = process_span_data_for_events(event_df, task_name)
             
+            # Calculate accuracy for simpleSpan after span processing
+            if task_name == 'simpleSpan':
+                # Calculate accuracy based on valid_cell_selection, invalid_cell_selection, and correct_cell
+                valid_cell_selection = event_df.get('valid_cell_selection', pd.Series())
+                invalid_cell_selection = event_df.get('invalid_cell_selection', pd.Series())
+                correct_cell = event_df.get('correct_cell', pd.Series())
+                
+                # Initialize accuracy column
+                accuracy_values = []
+                
+                for idx in range(len(event_df)):
+                    valid_sel = str(valid_cell_selection.iloc[idx]) if idx < len(valid_cell_selection) else 'n/a'
+                    invalid_sel = str(invalid_cell_selection.iloc[idx]) if idx < len(invalid_cell_selection) else 'n/a'
+                    correct = str(correct_cell.iloc[idx]) if idx < len(correct_cell) else 'n/a'
+                    
+                    # Normalize values (handle NaN, empty strings, etc.)
+                    if valid_sel in ['nan', '', 'None']:
+                        valid_sel = 'n/a'
+                    if invalid_sel in ['nan', '', 'None']:
+                        invalid_sel = 'n/a'
+                    if correct in ['nan', '', 'None']:
+                        correct = 'n/a'
+                    
+                    # Calculate accuracy based on the rules:
+                    # acc = 1.0 if valid_cell_selection == correct_cell
+                    # acc = 0.0 if correct_cell != n/a and correct_cell != valid_cell_selection OR 
+                    #      if either valid_cell_selection or invalid_cell_selection != n/a and not == correct_cell
+                    # n/a otherwise
+                    
+                    if valid_sel == correct and valid_sel != 'n/a':
+                        accuracy_values.append(1.0)
+                    elif (correct != 'n/a' and correct != valid_sel) or \
+                         ((valid_sel != 'n/a' or invalid_sel != 'n/a') and 
+                          valid_sel != correct and invalid_sel != correct):
+                        accuracy_values.append(0.0)
+                    else:
+                        accuracy_values.append('n/a')
+                
+                event_df['acc'] = accuracy_values
+            
             # Remove task-specific excluded columns AFTER span processing
             task_excluded_columns = self.config.get('exclude_columns_by_task', {}).get(task_name, [])
             for col in task_excluded_columns:
@@ -307,10 +369,27 @@ class EventFileProcessor:
             if len(event_df) > 0 and 'trial_type' in event_df.columns:
                 event_df.iloc[-1, event_df.columns.get_loc('trial_type')] = 'exit_fullscreen'
             
-            # Reorder columns: onset, duration, trial_type first, then alphabetically
-            priority_columns = ['onset', 'duration', 'trial_type']
-            other_columns = sorted([col for col in event_df.columns if col not in priority_columns])
-            column_order = [col for col in priority_columns if col in event_df.columns] + other_columns
+            # Reorder columns: onset, duration, trial_type, acc, trial_id first, then task-specific ordering
+            priority_columns = ['onset', 'duration', 'trial_type', 'acc', 'trial_id']
+            
+            # Special column ordering for simpleSpan task
+            if task_name == 'simpleSpan':
+                simpleSpan_specific_order = [
+                    'spatial_location', 'response', 'response_time', 'cell_movement', 
+                    'valid_cell_selection', 'invalid_cell_selection', 'correct_response'
+                ]
+                # Get remaining columns not in priority or simpleSpan specific order
+                remaining_columns = [col for col in event_df.columns 
+                                   if col not in priority_columns and col not in simpleSpan_specific_order]
+                # Combine priority columns + simpleSpan specific order + remaining columns alphabetically
+                column_order = ([col for col in priority_columns if col in event_df.columns] + 
+                               [col for col in simpleSpan_specific_order if col in event_df.columns] + 
+                               sorted(remaining_columns))
+            else:
+                # Default ordering: priority columns first, then alphabetically
+                other_columns = sorted([col for col in event_df.columns if col not in priority_columns])
+                column_order = [col for col in priority_columns if col in event_df.columns] + other_columns
+            
             event_df = event_df[column_order]
             
             # Apply float precision if specified

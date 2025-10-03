@@ -15,7 +15,7 @@ bids_columns:
 task_specific_columns:
   # Flanker task
   flanker:
-    "flanker": "flanker_condition"
+    "flanker": "flanker_letter"
     "center_letter": "center_letter"
     "correct_response": "correct_response"
     "response": "key_press"
