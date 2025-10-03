@@ -359,8 +359,16 @@ def process_simplespan_data(df):
     """
     Process simpleSpan data according to specific expansion rules.
     
-    For simpleSpan, the key requirement is that correct_cell_order items are aligned
-    with cell_selected values at the same index from cell_order_through_grid.
+    This function implements the exact logic required by the simpleSpan tests:
+    1. All timestamp values appear in response_time column
+    2. valid_responses items appear in valid_cell_selection column
+    3. extra_responses and duplicate_responses items appear in invalid_cell_selection column
+    4. cell_order_through_grid items appear in cell_movement column
+    5. correct_cell_order items appear in correct_cell column
+    6. Items at same indices in related lists appear in same output rows
+    7. When correct_cell_order is longer than valid_responses_timestamps, 
+       extra items get 'n/a' in response_time
+    8. test_trial rows with valid response_time are ordered by response_time
     
     Args:
         df (pd.DataFrame): Input simpleSpan dataframe
@@ -368,14 +376,11 @@ def process_simplespan_data(df):
     Returns:
         pd.DataFrame: Processed dataframe with expanded rows
     """
-    # Ensure cell_selected column exists in the dataframe
-    if 'cell_selected' not in df.columns:
-        df['cell_selected'] = 'n/a'
-    
-    # Ensure cell_movement column exists in the dataframe
-    if 'cell_movement' not in df.columns:
-        df['cell_movement'] = 'n/a'
-    
+    # Ensure required output columns exist
+    required_output_columns = ['valid_cell_selection', 'invalid_cell_selection', 'correct_cell', 'cell_movement']
+    for col in required_output_columns:
+        if col not in df.columns:
+            df[col] = 'n/a'
     
     expanded_rows = []
     
@@ -389,129 +394,178 @@ def process_simplespan_data(df):
         valid_responses_timestamps = parse_list_string(row.get('valid_responses_timestamps', ''))
         duplicate_responses_timestamps = parse_list_string(row.get('duplicate_responses_timestamps', ''))
         extra_responses_timestamps = parse_list_string(row.get('extra_responses_timestamps', ''))
-        correct_cell_order = parse_list_string(row.get('correct_cell', ''))
+        correct_cell_order = parse_list_string(row.get('correct_cell_order', ''))
         
-        
-        # First, create rows based on moving_through_grid_timestamps and cell_order_through_grid
+        # Create rows for moving_through_grid_timestamps and cell_order_through_grid
         if moving_timestamps:
-            # Create one row for each timestamp, with corresponding cell_order item
             for i, timestamp in enumerate(moving_timestamps):
                 new_row = row.copy()
-                new_row['moving_through_grid_timestamps'] = str(timestamp)
                 new_row['response_time'] = str(timestamp)
                 
                 # Get corresponding cell_order item at same index
                 if i < len(cell_order):
-                    new_row['cell_order_through_grid'] = str(cell_order[i])
-                    new_row['cell_selected'] = str(cell_order[i])  # Set cell_selected to cell_order value
-                    new_row['cell_movement'] = str(cell_order[i])  # Set cell_movement to cell_order value
+                    new_row['cell_movement'] = str(cell_order[i])
                 else:
-                    new_row['cell_order_through_grid'] = ''
-                    new_row['cell_selected'] = 'n/a'
                     new_row['cell_movement'] = 'n/a'
                 
-                # Clear other response columns and set non-relevant columns to n/a
+                # Clear list columns and set non-relevant columns to n/a
+                new_row['moving_through_grid_timestamps'] = ''
+                new_row['cell_order_through_grid'] = ''
                 new_row['valid_responses_timestamps'] = ''
                 new_row['duplicate_responses_timestamps'] = ''
                 new_row['extra_responses_timestamps'] = ''
-                new_row['correct_cell'] = ''  # Clear the original list (will be set later if needed)
+                new_row['valid_responses'] = ''
+                new_row['duplicate_responses'] = ''
+                new_row['extra_responses'] = ''
+                new_row['correct_cell_order'] = ''
                 
                 # Set non-relevant columns to n/a for movement rows
-                new_row['valid_responses'] = 'n/a'
-                new_row['duplicate_responses'] = 'n/a'
-                new_row['extra_responses'] = 'n/a'
-                new_row['response'] = 'n/a'  # Movement rows don't have key responses
-                
-                # Add a marker to track the original index for correct_cell_order alignment
-                new_row['_original_cell_order_index'] = i
+                new_row['valid_cell_selection'] = 'n/a'
+                new_row['invalid_cell_selection'] = 'n/a'
+                new_row['correct_cell'] = 'n/a'
+                new_row['response'] = 'n/a'
                 
                 expanded_rows.append(new_row)
         
-        # Add rows for valid_responses, duplicate_responses, and extra_responses
-        all_response_data = []
-        
+        # Create rows for valid_responses and valid_responses_timestamps
         if valid_responses:
             for i, response in enumerate(valid_responses):
-                response_data = {
-                    'response': str(response),
-                    'timestamp': valid_responses_timestamps[i] if i < len(valid_responses_timestamps) else 'n/a'
-                }
-                all_response_data.append(response_data)
+                new_row = row.copy()
+                new_row['valid_cell_selection'] = str(response)
+                
+                # Get corresponding timestamp at same index
+                if i < len(valid_responses_timestamps):
+                    new_row['response_time'] = str(valid_responses_timestamps[i])
+                else:
+                    new_row['response_time'] = 'n/a'
+                
+                # Clear list columns and set non-relevant columns to n/a
+                new_row['moving_through_grid_timestamps'] = ''
+                new_row['cell_order_through_grid'] = ''
+                new_row['valid_responses_timestamps'] = ''
+                new_row['duplicate_responses_timestamps'] = ''
+                new_row['extra_responses_timestamps'] = ''
+                new_row['valid_responses'] = ''
+                new_row['duplicate_responses'] = ''
+                new_row['extra_responses'] = ''
+                new_row['correct_cell_order'] = ''
+                
+                # Set non-relevant columns to n/a for valid response rows
+                new_row['invalid_cell_selection'] = 'n/a'
+                new_row['correct_cell'] = 'n/a'
+                new_row['cell_movement'] = 'n/a'
+                new_row['response'] = 'n/a'
+                
+                expanded_rows.append(new_row)
         
+        # Create rows for duplicate_responses and duplicate_responses_timestamps
         if duplicate_responses:
             for i, response in enumerate(duplicate_responses):
-                response_data = {
-                    'response': str(response),
-                    'timestamp': duplicate_responses_timestamps[i] if i < len(duplicate_responses_timestamps) else 'n/a'
-                }
-                all_response_data.append(response_data)
+                new_row = row.copy()
+                new_row['invalid_cell_selection'] = str(response)
+                
+                # Get corresponding timestamp at same index
+                if i < len(duplicate_responses_timestamps):
+                    new_row['response_time'] = str(duplicate_responses_timestamps[i])
+                else:
+                    new_row['response_time'] = 'n/a'
+                
+                # Clear list columns and set non-relevant columns to n/a
+                new_row['moving_through_grid_timestamps'] = ''
+                new_row['cell_order_through_grid'] = ''
+                new_row['valid_responses_timestamps'] = ''
+                new_row['duplicate_responses_timestamps'] = ''
+                new_row['extra_responses_timestamps'] = ''
+                new_row['valid_responses'] = ''
+                new_row['duplicate_responses'] = ''
+                new_row['extra_responses'] = ''
+                new_row['correct_cell_order'] = ''
+                
+                # Set non-relevant columns to n/a for duplicate response rows
+                new_row['valid_cell_selection'] = 'n/a'
+                new_row['correct_cell'] = 'n/a'
+                new_row['cell_movement'] = 'n/a'
+                new_row['response'] = 'n/a'
+                
+                expanded_rows.append(new_row)
         
+        # Create rows for extra_responses and extra_responses_timestamps
         if extra_responses:
             for i, response in enumerate(extra_responses):
-                response_data = {
-                    'response': str(response),
-                    'timestamp': extra_responses_timestamps[i] if i < len(extra_responses_timestamps) else 'n/a'
-                }
-                all_response_data.append(response_data)
-        
-        # Create rows for each response
-        for response_data in all_response_data:
-            new_row = row.copy()
-            new_row['cell_selected'] = response_data['response']
-            new_row['response_time'] = response_data['timestamp']
-            new_row['cell_movement'] = 'n/a'  # Response rows don't represent grid movement
-            new_row['correct_cell'] = 'n/a'  # Response rows don't have correct_cell alignment
-            
-            # Clear list columns
-            new_row['moving_through_grid_timestamps'] = ''
-            new_row['cell_order_through_grid'] = ''
-            new_row['valid_responses_timestamps'] = ''
-            new_row['duplicate_responses_timestamps'] = ''
-            new_row['extra_responses_timestamps'] = ''
-            new_row['valid_responses'] = ''
-            new_row['duplicate_responses'] = ''
-            new_row['extra_responses'] = ''
-            
-            # Set non-relevant columns to n/a for response rows
-            new_row['response'] = 'n/a'  # This will be set to the actual response value if needed
-            
-            expanded_rows.append(new_row)
-        
-        # Now handle correct_cell_order alignment
-        if correct_cell_order:
-            # Find rows that were created from moving_timestamps (they have _original_cell_order_index)
-            moving_rows = []
-            for j, row_data in enumerate(expanded_rows):
-                if row_data.get('_original_cell_order_index', -1) != -1:
-                    moving_rows.append((j, row_data.get('_original_cell_order_index', -1)))
-            
-            # Sort by index to maintain order
-            moving_rows.sort(key=lambda x: x[1])
-            
-            # Align correct_cell_order with the moving rows
-            for i, cell_order_item in enumerate(correct_cell_order):
-                # Find the row with the corresponding index
-                found_row = False
-                for row_idx, original_idx in moving_rows:
-                    if original_idx == i:
-                        # Add correct_cell_order to this row
-                        expanded_rows[row_idx]['correct_cell'] = str(cell_order_item)
-                        found_row = True
-                        break
+                new_row = row.copy()
+                new_row['invalid_cell_selection'] = str(response)
                 
-                if not found_row:
-                    # If no row found with this index, create a new row
-                    expected_cell_selected = None
-                    if i < len(cell_order):
-                        expected_cell_selected = str(cell_order[i])
-                    
+                # Get corresponding timestamp at same index
+                if i < len(extra_responses_timestamps):
+                    new_row['response_time'] = str(extra_responses_timestamps[i])
+                else:
+                    new_row['response_time'] = 'n/a'
+                
+                # Clear list columns and set non-relevant columns to n/a
+                new_row['moving_through_grid_timestamps'] = ''
+                new_row['cell_order_through_grid'] = ''
+                new_row['valid_responses_timestamps'] = ''
+                new_row['duplicate_responses_timestamps'] = ''
+                new_row['extra_responses_timestamps'] = ''
+                new_row['valid_responses'] = ''
+                new_row['duplicate_responses'] = ''
+                new_row['extra_responses'] = ''
+                new_row['correct_cell_order'] = ''
+                
+                # Set non-relevant columns to n/a for extra response rows
+                new_row['valid_cell_selection'] = 'n/a'
+                new_row['correct_cell'] = 'n/a'
+                new_row['cell_movement'] = 'n/a'
+                new_row['response'] = 'n/a'
+                
+                expanded_rows.append(new_row)
+        
+        # Handle correct_cell_order alignment with valid_responses_timestamps
+        if correct_cell_order:
+            # If we have valid_responses_timestamps, align with them
+            if valid_responses_timestamps:
+                # For matching indices, add correct_cell to existing valid response rows
+                for i, cell_order_item in enumerate(correct_cell_order):
+                    if i < len(valid_responses_timestamps):
+                        # Find the row with this timestamp in response_time
+                        timestamp_value = str(valid_responses_timestamps[i])
+                        for j, existing_row in enumerate(expanded_rows):
+                            if (existing_row.get('response_time') == timestamp_value and 
+                                existing_row.get('valid_cell_selection') != 'n/a'):
+                                expanded_rows[j]['correct_cell'] = str(cell_order_item)
+                                break
+                    else:
+                        # Create new row for extra correct_cell_order items
+                        new_row = row.copy()
+                        new_row['correct_cell'] = str(cell_order_item)
+                        new_row['response_time'] = 'n/a'
+                        
+                        # Clear list columns and set non-relevant columns to n/a
+                        new_row['moving_through_grid_timestamps'] = ''
+                        new_row['cell_order_through_grid'] = ''
+                        new_row['valid_responses_timestamps'] = ''
+                        new_row['duplicate_responses_timestamps'] = ''
+                        new_row['extra_responses_timestamps'] = ''
+                        new_row['valid_responses'] = ''
+                        new_row['duplicate_responses'] = ''
+                        new_row['extra_responses'] = ''
+                        new_row['correct_cell_order'] = ''
+                        
+                        # Set non-relevant columns to n/a for correct_cell_order rows
+                        new_row['valid_cell_selection'] = 'n/a'
+                        new_row['invalid_cell_selection'] = 'n/a'
+                        new_row['cell_movement'] = 'n/a'
+                        new_row['response'] = 'n/a'
+                        
+                        expanded_rows.append(new_row)
+            else:
+                # No valid_responses_timestamps, create rows for each correct_cell_order item
+                for cell_order_item in correct_cell_order:
                     new_row = row.copy()
                     new_row['correct_cell'] = str(cell_order_item)
-                    new_row['cell_selected'] = expected_cell_selected if expected_cell_selected else 'n/a'
                     new_row['response_time'] = 'n/a'
-                    new_row['cell_movement'] = expected_cell_selected if expected_cell_selected else 'n/a'
                     
-                    # Clear all list columns
+                    # Clear list columns and set non-relevant columns to n/a
                     new_row['moving_through_grid_timestamps'] = ''
                     new_row['cell_order_through_grid'] = ''
                     new_row['valid_responses_timestamps'] = ''
@@ -520,8 +574,12 @@ def process_simplespan_data(df):
                     new_row['valid_responses'] = ''
                     new_row['duplicate_responses'] = ''
                     new_row['extra_responses'] = ''
+                    new_row['correct_cell_order'] = ''
                     
-                    # Set non-relevant columns to n/a for correct_cell_order alignment rows
+                    # Set non-relevant columns to n/a for correct_cell_order rows
+                    new_row['valid_cell_selection'] = 'n/a'
+                    new_row['invalid_cell_selection'] = 'n/a'
+                    new_row['cell_movement'] = 'n/a'
                     new_row['response'] = 'n/a'
                     
                     expanded_rows.append(new_row)
@@ -534,11 +592,16 @@ def process_simplespan_data(df):
             new_row['valid_responses_timestamps'] = ''
             new_row['duplicate_responses_timestamps'] = ''
             new_row['extra_responses_timestamps'] = ''
+            new_row['valid_responses'] = ''
+            new_row['duplicate_responses'] = ''
+            new_row['extra_responses'] = ''
+            new_row['correct_cell_order'] = ''
             
             # Set non-relevant columns to n/a for rows with no list data
-            new_row['cell_selected'] = 'n/a'
-            new_row['cell_movement'] = 'n/a'
+            new_row['valid_cell_selection'] = 'n/a'
+            new_row['invalid_cell_selection'] = 'n/a'
             new_row['correct_cell'] = 'n/a'
+            new_row['cell_movement'] = 'n/a'
             
             expanded_rows.append(new_row)
     
@@ -547,15 +610,59 @@ def process_simplespan_data(df):
     
     result_df = pd.DataFrame(expanded_rows).reset_index(drop=True)
     
-    # Remove the temporary marker column
-    if '_original_cell_order_index' in result_df.columns:
-        result_df = result_df.drop('_original_cell_order_index', axis=1)
+    # Sort sequential clusters of test_trial rows by response_time
+    trial_id_series = result_df.get('trial_id', pd.Series())
+    response_time_series = result_df.get('response_time', pd.Series())
     
-    # Debug: Log if cell_selected column was created
-    if 'cell_selected' in result_df.columns:
-        logger.info(f"simpleSpan: cell_selected column created with {len(result_df[result_df['cell_selected'] != 'n/a'])} non-n/a values")
-    else:
-        logger.warning("simpleSpan: cell_selected column not found in processed data")
+    # Find clusters of consecutive test_trial rows with non-n/a response_time
+    is_test_trial = (trial_id_series == 'test_trial')
+    has_valid_response_time = (~response_time_series.astype(str).isin(['n/a', '', 'nan']))
+    is_cluster_member = is_test_trial & has_valid_response_time
+    
+    if is_cluster_member.any():
+        # Create a copy to work with
+        sorted_df = result_df.copy()
+        
+        # Find cluster boundaries
+        cluster_starts = []
+        cluster_ends = []
+        in_cluster = False
+        
+        for i in range(len(is_cluster_member)):
+            if is_cluster_member.iloc[i] and not in_cluster:
+                # Start of a new cluster
+                cluster_starts.append(i)
+                in_cluster = True
+            elif not is_cluster_member.iloc[i] and in_cluster:
+                # End of current cluster
+                cluster_ends.append(i - 1)
+                in_cluster = False
+        
+        # Handle case where cluster extends to end of dataframe
+        if in_cluster:
+            cluster_ends.append(len(is_cluster_member) - 1)
+        
+        # Sort each cluster by response_time
+        for start, end in zip(cluster_starts, cluster_ends):
+            if start <= end:
+                # Extract cluster
+                cluster_data = sorted_df.iloc[start:end+1].copy()
+                
+                # Convert response_time to numeric for sorting
+                cluster_data['response_time_numeric'] = pd.to_numeric(
+                    cluster_data['response_time'], errors='coerce'
+                )
+                
+                # Sort by response_time
+                cluster_sorted = cluster_data.sort_values('response_time_numeric')
+                cluster_sorted = cluster_sorted.drop('response_time_numeric', axis=1)
+                
+                # Replace the cluster in the dataframe
+                sorted_df.iloc[start:end+1] = cluster_sorted.values
+        
+        result_df = sorted_df
+    
+    logger.info(f"simpleSpan: processed {len(result_df)} rows from {len(df)} input rows")
     
     return result_df
 

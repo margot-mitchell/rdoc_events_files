@@ -279,6 +279,19 @@ class EventFileProcessor:
                         raise ValueError(f"No 'fmri_wait_block_trigger_start' trial_id found in file {output_path.name}. "
                                        f"This file should have been skipped as it likely contains practice/prescan data.")
             
+            # Special processing for cuedTS task
+            # Set correct_response to "n/a" for trials where trial_id = "test_cue"
+            if task_name == 'cuedTS':
+                trial_id_col = event_df.get('trial_id', pd.Series())
+                correct_response_col = event_df.get('correct_response', pd.Series())
+                
+                if 'trial_id' in event_df.columns and 'correct_response' in event_df.columns:
+                    # Create mask for test_cue trials
+                    test_cue_mask = (trial_id_col == 'test_cue')
+                    # Set correct_response to "n/a" for test_cue trials
+                    event_df.loc[test_cue_mask, 'correct_response'] = 'n/a'
+                    logger.info(f"Set correct_response to 'n/a' for {test_cue_mask.sum()} test_cue trials in cuedTS task")
+            
             # Replace all empty/null values with "n/a"
             event_df = event_df.fillna('n/a')
             # Also replace empty strings and whitespace-only strings with "n/a"
