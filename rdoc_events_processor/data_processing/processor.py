@@ -264,8 +264,8 @@ class EventFileProcessor:
                         trigger_idx = event_df[trigger_row_mask].index[0]
                         
                         # Remove all rows that occurred before the trigger row
-                        event_df = event_df.iloc[trigger_idx:].reset_index(drop=True)
-                        onset_seconds = onset_seconds.iloc[trigger_idx:].reset_index(drop=True)
+                        event_df = event_df.loc[trigger_idx:].reset_index(drop=True)
+                        onset_seconds = onset_seconds.loc[trigger_idx:].reset_index(drop=True)
                         
                         # Get the original onset value of the trigger row (now at index 0)
                         trigger_onset = onset_seconds.iloc[0]

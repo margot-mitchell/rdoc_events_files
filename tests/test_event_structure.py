@@ -166,12 +166,12 @@ class TestEventStructure:
         from pathlib import Path
         
         # Skip span tasks for this test
-        span_tasks = ['simpleSpan', 'opSpan', 'opOnlySpan']
+        span_tasks = ['simple_span', 'operation_span', 'operation_only_span']
         
         # Find input files (excluding span tasks)
         input_dir = Path("dropbox_bids")
         input_files = []
-        for file_path in input_dir.glob("**/sub-*_task-*_run-*_rdoc__fmri.csv"):
+        for file_path in input_dir.glob("**/sub-*_ses-*_run-*_task-*_rdoc__fmri.csv"):
             # Skip span tasks
             if any(span_task in file_path.name for span_task in span_tasks):
                 continue
