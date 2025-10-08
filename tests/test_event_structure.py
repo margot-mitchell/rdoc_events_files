@@ -42,23 +42,34 @@ class TestEventStructure:
                                 f"- use separate columns or flatten the data structure."
                             )
     
-    def test_no_duplicate_rows(self):
-        """Test that event files don't contain duplicate rows."""
+    def test_no_duplicate_onset_values(self):
+        """Test that event files don't contain duplicate onset values."""
         output_dir = Path("output")
         event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
         
         if not event_files:
             pytest.skip("No event files found in output directory")
         
+        duplicate_issues = []
+        
         for file_path in event_files:
             df = pd.read_csv(file_path, sep='\t')
             
-            # Check for duplicate rows
-            if df.duplicated().any():
-                duplicates = df[df.duplicated()].index.tolist()
-                pytest.fail(
-                    f"File {file_path} contains duplicate rows at indices: {duplicates}"
-                )
+            # Check for duplicate onset values
+            if 'onset' in df.columns:
+                if df['onset'].duplicated().any():
+                    duplicate_onsets = df[df['onset'].duplicated(keep=False)]['onset'].unique().tolist()
+                    duplicate_issues.append({
+                        'file': str(file_path),
+                        'duplicates': duplicate_onsets
+                    })
+        
+        if duplicate_issues:
+            error_msg = f"{len(duplicate_issues)} file(s) with duplicate onset values. First: {duplicate_issues[0]['file']}\n"
+            for issue in duplicate_issues:
+                error_msg += f"  {issue['file']}:\n"
+                error_msg += f"    Duplicate onset values: {issue['duplicates']}\n"
+            pytest.fail(error_msg)
     
     
     def test_no_empty_columns(self):
@@ -70,9 +81,9 @@ class TestEventStructure:
             pytest.skip("No event files found in output directory")
         
         for file_path in event_files:
-            df = pd.read_csv(file_path, sep='\t')
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
             
-            # Check for completely empty columns
+            # Check for completely empty columns (excluding columns filled with 'n/a')
             empty_columns = df.columns[df.isnull().all()].tolist()
             if empty_columns:
                 pytest.fail(
@@ -310,7 +321,7 @@ class TestEventStructure:
                 })
         
         if ordering_issues:
-            error_msg = "Event files with incorrect column ordering:\n"
+            error_msg = f"{len(ordering_issues)} file(s) with incorrect column ordering. First: {ordering_issues[0]['file']}\n"
             for issue in ordering_issues:
                 error_msg += f"  {issue['file']}:\n"
                 error_msg += f"    Actual: {issue['actual']}\n"
@@ -318,52 +329,82 @@ class TestEventStructure:
             error_msg += "\nColumns should be ordered as: onset, duration, trial_type, then alphabetically"
             pytest.fail(error_msg)
     
-    def test_no_duplicate_onset_values(self):
+    def test_onset_duration_alignment(self):
         """
-        Test that no event file has duplicate onset values.
-        Duplicate onset values can cause issues in fMRI analysis.
+        Test that for non-span tasks, the difference between consecutive onset values
+        roughly equals the duration value (in seconds) in the current row (first of the pair).
+        
+        This verifies that duration represents the time until the next event.
+        Tolerance: ±500ms (0.5 seconds)
         """
-        duplicate_issues = []
+        output_dir = Path("output")
+        event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
         
-        # Get all output files
-        output_dir = Path(__file__).parent.parent / "output"
-        if not output_dir.exists():
-            pytest.skip("Output directory does not exist")
+        if not event_files:
+            pytest.skip("No event files found in output directory")
         
-        output_files = list(output_dir.rglob("*.tsv"))
+        # Exclude span tasks
+        span_tasks = ['opSpan', 'opOnlySpan', 'simpleSpan']
+        non_span_files = [f for f in event_files if not any(task in f.name for task in span_tasks)]
         
-        for output_file in output_files:
-            try:
-                # Read the event file
-                df = pd.read_csv(output_file, sep='\t')
+        if not non_span_files:
+            pytest.skip("No non-span event files found")
+        
+        alignment_issues = []
+        
+        for file_path in non_span_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            
+            if 'onset' not in df.columns or 'duration' not in df.columns:
+                continue
+            
+            # Check consecutive pairs of rows
+            for i in range(len(df) - 1):
+                onset_current = df.iloc[i]['onset']
+                onset_next = df.iloc[i + 1]['onset']
+                duration_current = df.iloc[i]['duration']  # Changed: use current row's duration
                 
-                if 'onset' not in df.columns:
+                # Skip if any value is n/a or non-numeric
+                if (onset_current == 'n/a' or onset_next == 'n/a' or duration_current == 'n/a' or
+                    onset_current == '' or onset_next == '' or duration_current == ''):
                     continue
                 
-                # Check for duplicate onset values
-                onset_counts = df['onset'].value_counts()
-                duplicates = onset_counts[onset_counts > 1]
+                try:
+                    onset_current = float(onset_current)
+                    onset_next = float(onset_next)
+                    duration_current = float(duration_current)
+                except (ValueError, TypeError):
+                    continue
                 
-                if len(duplicates) > 0:
-                    duplicate_issues.append({
-                        'file': output_file.name,
-                        'duplicates': len(duplicates),
-                        'examples': list(duplicates.head(5).items())
+                # Calculate the difference between onsets (in seconds)
+                onset_diff = onset_next - onset_current
+                
+                # Convert duration from milliseconds to seconds
+                duration_seconds = duration_current / 1000.0
+                
+                # Check if they're roughly equal (within 500ms tolerance)
+                tolerance = 0.5  # seconds
+                difference = abs(onset_diff - duration_seconds)
+                
+                if difference > tolerance:
+                    alignment_issues.append({
+                        'file': str(file_path),
+                        'row_pair': f"{i} -> {i+1}",
+                        'onset_diff': onset_diff,
+                        'duration_seconds': duration_seconds,
+                        'difference': difference
                     })
-                    
-            except Exception as e:
-                duplicate_issues.append({
-                    'file': output_file.name,
-                    'error': str(e)
-                })
+                    # Only report first issue per file to keep output manageable
+                    break
         
-        if duplicate_issues:
-            error_msg = "Event files with duplicate onset values:\n"
-            for issue in duplicate_issues:
-                if 'error' in issue:
-                    error_msg += f"  {issue['file']}: Error - {issue['error']}\n"
-                else:
-                    error_msg += f"  {issue['file']}: {issue['duplicates']} duplicate onset values\n"
-                    error_msg += f"    Examples: {issue['examples']}\n"
-            error_msg += "\nDuplicate onset values can cause issues in fMRI analysis and should be resolved."
+        if alignment_issues:
+            error_msg = f"{len(alignment_issues)} file(s) with onset-duration misalignment. First: {alignment_issues[0]['file']}\n"
+            for issue in alignment_issues[:20]:  # Show first 20 issues
+                error_msg += f"  {issue['file']} (rows {issue['row_pair']}):\n"
+                error_msg += f"    Onset diff: {issue['onset_diff']:.3f}s, Duration: {issue['duration_seconds']:.3f}s, "
+                error_msg += f"Diff: {issue['difference']:.3f}s\n"
+            if len(alignment_issues) > 20:
+                error_msg += f"  ... and {len(alignment_issues) - 20} more files\n"
+            error_msg += "\nDuration should represent time until next event (tolerance: ±500ms)"
             pytest.fail(error_msg)
+    

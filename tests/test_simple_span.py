@@ -1202,6 +1202,99 @@ class TestSimpleSpanColumnValidation:
                                 f"is not ordered by response_time.\n"
                                 f"First incorrect position within cluster: {i}\n"
                                 f"Cluster order: {original_order}\n"
-                                f"Row {start + i} response_time: {original_order[i]}\n"
-                                f"Row {start + i + 1} response_time: {original_order[i + 1]}"
-                            )
+                            f"Row {start + i} response_time: {original_order[i]}\n"
+                            f"Row {start + i + 1} response_time: {original_order[i + 1]}"
+                        )
+    
+    def test_simple_span_accuracy_calculation(self):
+        """
+        Test that accuracy is calculated correctly for simpleSpan tasks.
+        
+        Rules:
+        - acc = 1.0 if valid_cell_selection == correct_cell
+        - acc = 0.0 if correct_cell != n/a and correct_cell != valid_cell_selection OR 
+          if either valid_cell_selection or invalid_cell_selection != n/a and not == correct_cell
+        - n/a otherwise
+        """
+        from pathlib import Path
+        
+        # Find simpleSpan output event files
+        output_dir = Path("output")
+        simple_span_output_files = list(output_dir.glob("**/*simpleSpan*_events.tsv"))
+        
+        if not simple_span_output_files:
+            pytest.skip("No simpleSpan output event files found in output directory")
+        
+        accuracy_issues = []
+        
+        for file_path in simple_span_output_files:
+            try:
+                df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+                
+                # Check each row for correct accuracy calculation
+                for idx, row in df.iterrows():
+                    valid_cell_selection = str(row.get('valid_cell_selection', 'n/a'))
+                    invalid_cell_selection = str(row.get('invalid_cell_selection', 'n/a'))
+                    correct_cell = str(row.get('correct_cell', 'n/a'))
+                    actual_acc = row.get('acc', 'n/a')
+                    
+                    # Normalize values (handle NaN, empty strings, etc.)
+                    if valid_cell_selection in ['nan', '', 'None']:
+                        valid_cell_selection = 'n/a'
+                    if invalid_cell_selection in ['nan', '', 'None']:
+                        invalid_cell_selection = 'n/a'
+                    if correct_cell in ['nan', '', 'None']:
+                        correct_cell = 'n/a'
+                    
+                    # Calculate expected accuracy based on rules
+                    expected_acc = 'n/a'  # Default
+                    
+                    # Rule 1: acc = 1.0 if valid_cell_selection == correct_cell
+                    if valid_cell_selection == correct_cell and valid_cell_selection != 'n/a':
+                        expected_acc = 1.0
+                    # Rule 2: acc = 0.0 if correct_cell != n/a and correct_cell != valid_cell_selection
+                    elif correct_cell != 'n/a' and correct_cell != valid_cell_selection:
+                        expected_acc = 0.0
+                    # Rule 3: acc = 0.0 if either valid_cell_selection or invalid_cell_selection != n/a 
+                    # and not == correct_cell
+                    elif ((valid_cell_selection != 'n/a' or invalid_cell_selection != 'n/a') and 
+                          valid_cell_selection != correct_cell and invalid_cell_selection != correct_cell):
+                        expected_acc = 0.0
+                    
+                    # Compare actual vs expected accuracy
+                    # Normalize both values to handle type differences (e.g., 1.0 vs 1, '1.0' vs 1.0)
+                    def normalize_value(val):
+                        if val == 'n/a':
+                            return 'n/a'
+                        try:
+                            # Try to convert to float first
+                            return float(val)
+                        except (ValueError, TypeError):
+                            # If conversion fails, return as string
+                            return str(val)
+                    
+                    actual_acc_normalized = normalize_value(actual_acc)
+                    expected_acc_normalized = normalize_value(expected_acc)
+                    
+                    if actual_acc_normalized != expected_acc_normalized:
+                        accuracy_issues.append(
+                            f"{file_path.name} row {idx}: "
+                            f"valid_cell_selection='{valid_cell_selection}', "
+                            f"invalid_cell_selection='{invalid_cell_selection}', "
+                            f"correct_cell='{correct_cell}' -> "
+                            f"expected acc={expected_acc}, actual acc={actual_acc}"
+                        )
+                        
+            except Exception as e:
+                accuracy_issues.append(f"{file_path.name}: Error processing - {str(e)}")
+        
+        if accuracy_issues:
+            error_msg = "simpleSpan accuracy calculation issues:\n\n"
+            for issue in accuracy_issues:
+                error_msg += f"  {issue}\n"
+            error_msg += "\nAccuracy calculation rules:\n"
+            error_msg += "1. acc = 1.0 if valid_cell_selection == correct_cell\n"
+            error_msg += "2. acc = 0.0 if correct_cell != n/a and correct_cell != valid_cell_selection\n"
+            error_msg += "3. acc = 0.0 if either valid_cell_selection or invalid_cell_selection != n/a and not == correct_cell\n"
+            error_msg += "4. acc = n/a otherwise"
+            pytest.fail(error_msg)

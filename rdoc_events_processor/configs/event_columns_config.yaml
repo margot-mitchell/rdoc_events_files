@@ -85,7 +85,6 @@ task_specific_columns:
   "visualSearch":
     "target_present": "target_present"
     "num_stimuli": "num_stimuli"
-    "order_and_color_of_rectangles": "order_and_color_of_rectangles"
     "target_rectangle_location": "target_rectangle_location"
     "correct_response": "correct_response"
     "response": "key_press"

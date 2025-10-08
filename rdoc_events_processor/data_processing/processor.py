@@ -257,6 +257,18 @@ class EventFileProcessor:
             # Create DataFrame
             event_df = pd.DataFrame(event_data)
             
+            # Handle duration column: use trial_duration instead of stimulus_duration for test_trial rows
+            if 'duration' in event_df.columns and 'trial_id' in event_df.columns:
+                # Check if we have trial_duration available in the original data
+                if 'trial_duration' in data.columns:
+                    trial_id_col = event_df['trial_id']
+                    test_trial_mask = (trial_id_col == 'test_trial')
+                    
+                    if test_trial_mask.any():
+                        # Replace duration with trial_duration for test_trial rows
+                        event_df.loc[test_trial_mask, 'duration'] = data.loc[test_trial_mask, 'trial_duration'].values
+                        logger.info(f"Used trial_duration instead of stimulus_duration for {test_trial_mask.sum()} test_trial rows")
+            
             # Special processing for span tasks - expand list columns
             if task_name in ['opSpan', 'simpleSpan']:
                 logger.info(f"Processing span task data for {task_name}")
@@ -312,34 +324,202 @@ class EventFileProcessor:
             if 'onset' in event_df.columns:
                 # Convert to numeric, handling any non-numeric values
                 onset_series = pd.to_numeric(event_df['onset'], errors='coerce')
-                
+
                 # Only process if we have valid numeric onset values
                 if not onset_series.isna().all():
                     # Convert from milliseconds to seconds
                     onset_seconds = onset_series / 1000.0
+
+                    # FIRST: Find the fmri_wait_block_initial row in the ORIGINAL data (before filtering)
+                    # This gives us the reference point for normalization
+                    initial_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_initial'
                     
-                    # Find the row where trial_id = "fmri_wait_block_trigger_start"
-                    trigger_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
-                    
-                    if trigger_row_mask.any():
-                        # Get the trigger row index
-                        trigger_idx = event_df[trigger_row_mask].index[0]
+                    if initial_row_mask.any():
+                        # Get the initial row index and time_elapsed value BEFORE filtering
+                        initial_idx = event_df[initial_row_mask].index[0]
+                        initial_onset = onset_seconds.iloc[initial_idx]
                         
-                        # Remove all rows that occurred before the trigger row
-                        event_df = event_df.loc[trigger_idx:].reset_index(drop=True)
-                        onset_seconds = onset_seconds.loc[trigger_idx:].reset_index(drop=True)
+                        # SECOND: Find the trigger row and filter out rows before it
+                        trigger_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
                         
-                        # Get the original onset value of the trigger row (now at index 0)
-                        trigger_onset = onset_seconds.iloc[0]
-                        
-                        # Subtract trigger onset from all values (normalize trigger to 0)
-                        event_df['onset'] = onset_seconds - trigger_onset
-                        
-                        logger.info(f"Removed {trigger_idx} rows before trigger start and normalized to trigger start (trigger onset: {trigger_onset:.3f}s)")
+                        if trigger_row_mask.any():
+                            # Get the trigger row index
+                            trigger_idx = event_df[trigger_row_mask].index[0]
+                            
+                            # Remove all rows that occurred before the trigger row
+                            event_df = event_df.loc[trigger_idx:].reset_index(drop=True)
+                            onset_seconds = onset_seconds.loc[trigger_idx:].reset_index(drop=True)
+                            
+                            # THIRD: Create onset values using the reference from original fmri_wait_block_initial
+                            # onset[0] = 0.0 (trigger start)
+                            # onset[1] = time_elapsed[trigger_start] - time_elapsed[original_fmri_wait_block_initial]
+                            # onset[2] = time_elapsed[trigger_end] - time_elapsed[original_fmri_wait_block_initial]
+                            # onset[3] = time_elapsed[initial] - time_elapsed[original_fmri_wait_block_initial], etc.
+                            shifted_onset = [0.0] + [(val - initial_onset) for val in onset_seconds[1:]]
+                            
+                            trigger_onset = onset_seconds.iloc[0]
+                            
+                            # Round onset values to 5 decimal places
+                            shifted_onset = [round(val, 5) for val in shifted_onset]
+                            event_df['onset'] = shifted_onset
+
+                            logger.info(f"Removed {trigger_idx} rows before trigger start and normalized to original fmri_wait_block_initial (initial onset: {initial_onset:.3f}s)")
+                        else:
+                            # If no trigger found, this is an error since we should have skipped files without triggers
+                            raise ValueError(f"No 'fmri_wait_block_trigger_start' trial_id found in file {output_path.name}. "
+                                           f"This file should have been skipped as it likely contains practice/prescan data.")
                     else:
-                        # If no trigger found, this is an error since we should have skipped files without triggers
-                        raise ValueError(f"No 'fmri_wait_block_trigger_start' trial_id found in file {output_path.name}. "
-                                       f"This file should have been skipped as it likely contains practice/prescan data.")
+                        # Fallback: if no fmri_wait_block_initial found, normalize to trigger_start
+                        trigger_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
+                        
+                        if trigger_row_mask.any():
+                            trigger_idx = event_df[trigger_row_mask].index[0]
+                            event_df = event_df.loc[trigger_idx:].reset_index(drop=True)
+                            onset_seconds = onset_seconds.loc[trigger_idx:].reset_index(drop=True)
+                            
+                            trigger_onset = onset_seconds.iloc[0]
+                            shifted_onset = [0.0] + [(val - trigger_onset) for val in onset_seconds[1:]]
+                            
+                            shifted_onset = [round(val, 5) for val in shifted_onset]
+                            event_df['onset'] = shifted_onset
+                            
+                            logger.info(f"Removed {trigger_idx} rows before trigger start and normalized to trigger start (no fmri_wait_block_initial found)")
+                        else:
+                            raise ValueError(f"No 'fmri_wait_block_trigger_start' trial_id found in file {output_path.name}. "
+                                           f"This file should have been skipped as it likely contains practice/prescan data.")
+            
+            # Special processing for simpleSpan task
+            # For sequences of test_trial rows, recalculate onsets based on response_time
+            # A row is in a sequence if row[i] = test_trial AND row[i-1] = test_trial AND row[i+1] = test_trial
+            if task_name == 'simpleSpan':
+                if 'trial_id' in event_df.columns and 'onset' in event_df.columns and 'response_time' in event_df.columns:
+                    trial_id_col = event_df['trial_id']
+                    onset_col = event_df['onset'].copy()
+                    response_time_col = event_df['response_time']
+                    
+                    # Convert response_time to numeric and from milliseconds to seconds
+                    response_time_numeric = pd.to_numeric(response_time_col, errors='coerce') / 1000.0
+                    
+                    # Identify which rows are part of a test_trial sequence
+                    # A row is in a sequence if row[i] = test_trial AND row[i-1] = test_trial AND row[i+1] = test_trial
+                    is_test_trial = (trial_id_col == 'test_trial')
+                    in_sequence = pd.Series([False] * len(event_df), index=event_df.index)
+                    
+                    for i in range(len(event_df)):
+                        if is_test_trial.iloc[i]:
+                            # Check if previous and next rows are also test_trial
+                            prev_is_test = (i > 0) and is_test_trial.iloc[i - 1]
+                            next_is_test = (i < len(event_df) - 1) and is_test_trial.iloc[i + 1]
+                            
+                            if prev_is_test and next_is_test:
+                                in_sequence.iloc[i] = True
+                    
+                    # Now find the sequences and process them
+                    sequences_found = []
+                    i = 0
+                    while i < len(event_df):
+                        if in_sequence.iloc[i]:
+                            # Found the start of a sequence
+                            sequence_start = i
+                            sequence_end = i
+                            
+                            # Find the end of this sequence
+                            while sequence_end < len(event_df) and in_sequence.iloc[sequence_end]:
+                                sequence_end += 1
+                            sequence_end -= 1  # Back up to the last row that was in the sequence
+                            
+                            # Store this sequence
+                            sequences_found.append((sequence_start, sequence_end))
+                            
+                            # Move to the next row after this sequence
+                            i = sequence_end + 1
+                        else:
+                            i += 1
+                    
+                    # Process each sequence
+                    rows_modified = 0
+                    for seq_start, seq_end in sequences_found:
+                        # For all rows in the sequence:
+                        # First row: onset[i] = onset[i-1] + response_time[i-1]
+                        # Other rows: onset[i] = onset[i-1] + (response_time[i-1] - response_time[i-2])
+                        for j in range(seq_start, seq_end + 1):
+                            if j > 0:  # Make sure we're not at the very first row of the entire dataframe
+                                prev_onset = onset_col.iloc[j - 1]
+                                rt_prev = response_time_numeric.iloc[j - 1]
+                                
+                                if pd.notna(rt_prev):
+                                    if j == seq_start:
+                                        # First row in sequence: onset[i] = onset[i-1] + response_time[i-1]
+                                        new_onset = prev_onset + rt_prev
+                                    else:
+                                        # Other rows: onset[i] = onset[i-1] + (response_time[i-1] - response_time[i-2])
+                                        if j > 1:  # Make sure we can access i-2
+                                            rt_prev_prev = response_time_numeric.iloc[j - 2]
+                                            if pd.notna(rt_prev_prev):
+                                                # Get the most recently calculated onset for row j-1
+                                                prev_onset_updated = event_df.loc[j - 1, 'onset']
+                                                new_onset = prev_onset_updated + (rt_prev - rt_prev_prev)
+                                            else:
+                                                # If rt[i-2] is missing, fall back to simple addition
+                                                prev_onset_updated = event_df.loc[j - 1, 'onset']
+                                                new_onset = prev_onset_updated + rt_prev
+                                        else:
+                                            # Edge case: can't access i-2, use simple addition
+                                            new_onset = prev_onset + rt_prev
+                                    
+                                    event_df.loc[j, 'onset'] = round(new_onset, 5)
+                                    rows_modified += 1
+                        
+                        # Also modify the row that comes RIGHT AFTER the sequence
+                        # onset[row_after] = onset[last_row_in_seq] + (response_time[last_row] - response_time[second_to_last_row])
+                        row_after_seq = seq_end + 1
+                        if row_after_seq < len(event_df) and seq_end > 0:
+                            # Get response times for the last two rows of the sequence
+                            rt_last = response_time_numeric.iloc[seq_end]
+                            rt_second_to_last = response_time_numeric.iloc[seq_end - 1]
+                            
+                            if pd.notna(rt_last) and pd.notna(rt_second_to_last):
+                                # Get the updated onset for the last row in the sequence
+                                last_onset_updated = event_df.loc[seq_end, 'onset']
+                                new_onset = last_onset_updated + (rt_last - rt_second_to_last)
+                                event_df.loc[row_after_seq, 'onset'] = round(new_onset, 5)
+                                rows_modified += 1
+                    
+                    if rows_modified > 0:
+                        logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} test_trial sequences (including rows after sequences) in simpleSpan task")
+                    
+                    # Check if rows are in increasing order of onset and reorder if needed
+                    if 'onset' in event_df.columns and 'trial_id' in event_df.columns:
+                        onset_values = pd.to_numeric(event_df['onset'], errors='coerce')
+                        
+                        # Check if onset values are strictly increasing
+                        is_increasing = onset_values.is_monotonic_increasing
+                        
+                        if not is_increasing:
+                            # Find rows that are out of order
+                            out_of_order_indices = []
+                            for i in range(len(onset_values) - 1):
+                                if pd.notna(onset_values.iloc[i]) and pd.notna(onset_values.iloc[i + 1]):
+                                    if onset_values.iloc[i] > onset_values.iloc[i + 1]:
+                                        out_of_order_indices.extend([i, i + 1])
+                            
+                            # Check which out-of-order rows are not test_ITI or test_inter-stim
+                            problematic_rows = []
+                            for idx in set(out_of_order_indices):
+                                trial_id = event_df.iloc[idx].get('trial_id', '')
+                                if trial_id not in ['test_ITI', 'test_inter-stim']:
+                                    problematic_rows.append({
+                                        'index': idx,
+                                        'trial_id': trial_id,
+                                        'onset': onset_values.iloc[idx]
+                                    })
+                            
+                            if problematic_rows:
+                                logger.warning(f"Found {len(problematic_rows)} non-ITI/inter-stim rows out of onset order: {problematic_rows}")
+                            else:
+                                # Only reorder if all out-of-order rows are test_ITI or test_inter-stim
+                                event_df = event_df.sort_values('onset').reset_index(drop=True)
+                                logger.info("Reordered simpleSpan rows by onset values (only ITI/inter-stim rows were out of order)")
             
             # Special processing for cuedTS task
             # Set correct_response to "n/a" for trials where trial_id = "test_cue"
@@ -353,6 +533,43 @@ class EventFileProcessor:
                     # Set correct_response to "n/a" for test_cue trials
                     event_df.loc[test_cue_mask, 'correct_response'] = 'n/a'
                     logger.info(f"Set correct_response to 'n/a' for {test_cue_mask.sum()} test_cue trials in cuedTS task")
+                
+                # Set cue_condition and task_condition based on trial_id
+                if 'trial_id' in event_df.columns:
+                    # Create masks for different trial types
+                    test_cue_mask = (trial_id_col == 'test_cue')
+                    test_trial_mask = (trial_id_col == 'test_trial')
+                    other_trial_mask = ~(test_cue_mask | test_trial_mask)
+                    
+                    # For test_cue trials: cue_condition keeps original value, task_condition = "n/a"
+                    if 'task_condition' in event_df.columns:
+                        event_df.loc[test_cue_mask, 'task_condition'] = 'n/a'
+                        logger.info(f"Set task_condition to 'n/a' for {test_cue_mask.sum()} test_cue trials in cuedTS task")
+                    
+                    # For test_trial trials: cue_condition = "n/a", task_condition keeps original value
+                    if 'cue_condition' in event_df.columns:
+                        event_df.loc[test_trial_mask, 'cue_condition'] = 'n/a'
+                        logger.info(f"Set cue_condition to 'n/a' for {test_trial_mask.sum()} test_trial trials in cuedTS task")
+                    
+                    # For other trials: both cue_condition and task_condition = "n/a"
+                    if 'cue_condition' in event_df.columns:
+                        event_df.loc[other_trial_mask, 'cue_condition'] = 'n/a'
+                        logger.info(f"Set cue_condition to 'n/a' for {other_trial_mask.sum()} other trials in cuedTS task")
+                    
+                    if 'task_condition' in event_df.columns:
+                        event_df.loc[other_trial_mask, 'task_condition'] = 'n/a'
+                        logger.info(f"Set task_condition to 'n/a' for {other_trial_mask.sum()} other trials in cuedTS task")
+                
+                # Set cue and task to "n/a" when their corresponding condition columns are "n/a"
+                if 'cue_condition' in event_df.columns and 'cue' in event_df.columns:
+                    cue_condition_n_a_mask = (event_df['cue_condition'] == 'n/a')
+                    event_df.loc[cue_condition_n_a_mask, 'cue'] = 'n/a'
+                    logger.info(f"Set cue to 'n/a' for {cue_condition_n_a_mask.sum()} trials where cue_condition is 'n/a' in cuedTS task")
+                
+                if 'task_condition' in event_df.columns and 'task' in event_df.columns:
+                    task_condition_n_a_mask = (event_df['task_condition'] == 'n/a')
+                    event_df.loc[task_condition_n_a_mask, 'task'] = 'n/a'
+                    logger.info(f"Set task to 'n/a' for {task_condition_n_a_mask.sum()} trials where task_condition is 'n/a' in cuedTS task")
             
             # Replace all empty/null values with "n/a"
             event_df = event_df.fillna('n/a')
@@ -369,26 +586,15 @@ class EventFileProcessor:
             if len(event_df) > 0 and 'trial_type' in event_df.columns:
                 event_df.iloc[-1, event_df.columns.get_loc('trial_type')] = 'exit_fullscreen'
             
-            # Reorder columns: onset, duration, trial_type, acc, trial_id first, then task-specific ordering
-            priority_columns = ['onset', 'duration', 'trial_type', 'acc', 'trial_id']
+            # Reorder columns: onset, duration, trial_type first, then all others alphabetically
+            # This matches BIDS specification and test requirements
+            priority_columns = ['onset', 'duration', 'trial_type']
             
-            # Special column ordering for simpleSpan task
-            if task_name == 'simpleSpan':
-                simpleSpan_specific_order = [
-                    'spatial_location', 'response', 'response_time', 'cell_movement', 
-                    'valid_cell_selection', 'invalid_cell_selection', 'correct_response'
-                ]
-                # Get remaining columns not in priority or simpleSpan specific order
-                remaining_columns = [col for col in event_df.columns 
-                                   if col not in priority_columns and col not in simpleSpan_specific_order]
-                # Combine priority columns + simpleSpan specific order + remaining columns alphabetically
-                column_order = ([col for col in priority_columns if col in event_df.columns] + 
-                               [col for col in simpleSpan_specific_order if col in event_df.columns] + 
-                               sorted(remaining_columns))
-            else:
-                # Default ordering: priority columns first, then alphabetically
-                other_columns = sorted([col for col in event_df.columns if col not in priority_columns])
-                column_order = [col for col in priority_columns if col in event_df.columns] + other_columns
+            # Get all other columns and sort them alphabetically
+            other_columns = sorted([col for col in event_df.columns if col not in priority_columns])
+            
+            # Combine priority columns + alphabetically sorted other columns
+            column_order = [col for col in priority_columns if col in event_df.columns] + other_columns
             
             event_df = event_df[column_order]
             

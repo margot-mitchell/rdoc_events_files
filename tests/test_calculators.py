@@ -25,22 +25,22 @@ class TestStopSignalCalculations:
     def test_calculate_stop_accuracy_stop_success(self):
         """Test stop accuracy calculation for successful stop trials."""
         row = {'SS_trial_type': 'stop', 'correct_trial': 1.0}
-        assert calculate_stop_accuracy(row) == '1'
+        assert calculate_stop_accuracy(row) == 1.0
     
     def test_calculate_stop_accuracy_stop_failure(self):
         """Test stop accuracy calculation for failed stop trials."""
         row = {'SS_trial_type': 'stop', 'correct_trial': 0.0}
-        assert calculate_stop_accuracy(row) == '0'
+        assert calculate_stop_accuracy(row) == 0.0
     
     def test_calculate_go_accuracy_go_success(self):
         """Test go accuracy calculation for successful go trials."""
         row = {'SS_trial_type': 'go', 'correct_trial': 1.0}
-        assert calculate_go_accuracy(row) == '1'
+        assert calculate_go_accuracy(row) == 1.0
     
     def test_calculate_go_accuracy_go_failure(self):
         """Test go accuracy calculation for failed go trials."""
         row = {'SS_trial_type': 'go', 'correct_trial': 0.0}
-        assert calculate_go_accuracy(row) == '0'
+        assert calculate_go_accuracy(row) == 0.0
     
     def test_calculate_go_accuracy_stop_trial(self):
         """Test go accuracy calculation for stop trials."""

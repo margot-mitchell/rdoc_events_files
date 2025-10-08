@@ -525,6 +525,7 @@ def process_simplespan_data(df):
             # If we have valid_responses_timestamps, align with them
             if valid_responses_timestamps:
                 # For matching indices, add correct_cell to existing valid response rows
+                # Only process items that align with valid_responses_timestamps (don't create extra rows)
                 for i, cell_order_item in enumerate(correct_cell_order):
                     if i < len(valid_responses_timestamps):
                         # Find the row with this timestamp in response_time
@@ -534,30 +535,7 @@ def process_simplespan_data(df):
                                 existing_row.get('valid_cell_selection') != 'n/a'):
                                 expanded_rows[j]['correct_cell'] = str(cell_order_item)
                                 break
-                    else:
-                        # Create new row for extra correct_cell_order items
-                        new_row = row.copy()
-                        new_row['correct_cell'] = str(cell_order_item)
-                        new_row['response_time'] = 'n/a'
-                        
-                        # Clear list columns and set non-relevant columns to n/a
-                        new_row['moving_through_grid_timestamps'] = ''
-                        new_row['cell_order_through_grid'] = ''
-                        new_row['valid_responses_timestamps'] = ''
-                        new_row['duplicate_responses_timestamps'] = ''
-                        new_row['extra_responses_timestamps'] = ''
-                        new_row['valid_responses'] = ''
-                        new_row['duplicate_responses'] = ''
-                        new_row['extra_responses'] = ''
-                        new_row['correct_cell_order'] = ''
-                        
-                        # Set non-relevant columns to n/a for correct_cell_order rows
-                        new_row['valid_cell_selection'] = 'n/a'
-                        new_row['invalid_cell_selection'] = 'n/a'
-                        new_row['cell_movement'] = 'n/a'
-                        new_row['response'] = 'n/a'
-                        
-                        expanded_rows.append(new_row)
+                    # If i >= len(valid_responses_timestamps), skip this item (don't create extra rows)
             else:
                 # No valid_responses_timestamps, create rows for each correct_cell_order item
                 for cell_order_item in correct_cell_order:
