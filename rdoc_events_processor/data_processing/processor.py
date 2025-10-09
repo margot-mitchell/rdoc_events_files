@@ -269,6 +269,19 @@ class EventFileProcessor:
                         event_df.loc[test_trial_mask, 'duration'] = data.loc[test_trial_mask, 'trial_duration'].values
                         logger.info(f"Used trial_duration instead of stimulus_duration for {test_trial_mask.sum()} test_trial rows")
             
+            # Handle duration column: use block_duration when it's not null (typically for fmri_wait_block_trigger_end rows)
+            if 'duration' in event_df.columns and 'block_duration' in data.columns:
+                # Convert block_duration to numeric, treating empty strings and 'n/a' as NaN
+                block_duration_series = pd.to_numeric(data['block_duration'], errors='coerce')
+                
+                # Create mask for non-null block_duration values
+                block_duration_mask = block_duration_series.notna()
+                
+                if block_duration_mask.any():
+                    # Replace duration with block_duration for rows where block_duration is not null
+                    event_df.loc[block_duration_mask, 'duration'] = block_duration_series[block_duration_mask].values
+                    logger.info(f"Used block_duration instead of stimulus_duration for {block_duration_mask.sum()} rows with non-null block_duration")
+            
             # Special processing for span tasks - expand list columns
             if task_name in ['opSpan', 'simpleSpan']:
                 logger.info(f"Processing span task data for {task_name}")
@@ -351,11 +364,12 @@ class EventFileProcessor:
                             onset_seconds = onset_seconds.loc[trigger_idx:].reset_index(drop=True)
                             
                             # THIRD: Create onset values using the reference from original fmri_wait_block_initial
-                            # onset[0] = 0.0 (trigger start)
-                            # onset[1] = time_elapsed[trigger_start] - time_elapsed[original_fmri_wait_block_initial]
-                            # onset[2] = time_elapsed[trigger_end] - time_elapsed[original_fmri_wait_block_initial]
-                            # onset[3] = time_elapsed[initial] - time_elapsed[original_fmri_wait_block_initial], etc.
-                            shifted_onset = [0.0] + [(val - initial_onset) for val in onset_seconds[1:]]
+                            # onset[0] = 0.0 (trigger_start)
+                            # onset[1] = time_elapsed[trigger_start] - time_elapsed[fmri_wait_block_initial]
+                            # onset[2] = time_elapsed[trigger_end] - time_elapsed[fmri_wait_block_initial]
+                            # onset[i] = time_elapsed[row i-1] - time_elapsed[fmri_wait_block_initial], etc.
+                            # Each row's onset is based on the PREVIOUS row's time_elapsed
+                            shifted_onset = [0.0] + [(onset_seconds.iloc[i-1] - initial_onset) for i in range(1, len(onset_seconds))]
                             
                             trigger_onset = onset_seconds.iloc[0]
                             
@@ -363,7 +377,7 @@ class EventFileProcessor:
                             shifted_onset = [round(val, 5) for val in shifted_onset]
                             event_df['onset'] = shifted_onset
 
-                            logger.info(f"Removed {trigger_idx} rows before trigger start and normalized to original fmri_wait_block_initial (initial onset: {initial_onset:.3f}s)")
+                            logger.info(f"Removed {trigger_idx} rows before trigger start. Onset[0]=0.0 (trigger_start), subsequent onsets calculated from previous row's time_elapsed minus fmri_wait_block_initial ({initial_onset:.3f}s)")
                         else:
                             # If no trigger found, this is an error since we should have skipped files without triggers
                             raise ValueError(f"No 'fmri_wait_block_trigger_start' trial_id found in file {output_path.name}. "
