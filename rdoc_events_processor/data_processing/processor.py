@@ -257,30 +257,52 @@ class EventFileProcessor:
             # Create DataFrame
             event_df = pd.DataFrame(event_data)
             
-            # Handle duration column: use trial_duration instead of stimulus_duration for test_trial rows
+            # Handle duration column with explicit priority logic
             if 'duration' in event_df.columns and 'trial_id' in event_df.columns:
-                # Check if we have trial_duration available in the original data
-                if 'trial_duration' in data.columns:
-                    trial_id_col = event_df['trial_id']
-                    test_trial_mask = (trial_id_col == 'test_trial')
+                # Get the duration column values (starts as stimulus_duration from config)
+                # Convert to numeric for comparison
+                stimulus_duration_series = pd.to_numeric(data.get('stimulus_duration', pd.Series([pd.NA]*len(data))), errors='coerce')
+                trial_duration_series = pd.to_numeric(data.get('trial_duration', pd.Series([pd.NA]*len(data))), errors='coerce')
+                block_duration_series = pd.to_numeric(data.get('block_duration', pd.Series([pd.NA]*len(data))), errors='coerce')
+                
+                trial_id_col = event_df['trial_id']
+                new_duration = []
+                
+                for idx in event_df.index:
+                    trial_id = trial_id_col.loc[idx]
+                    stim_dur = stimulus_duration_series.loc[idx] if idx in stimulus_duration_series.index else pd.NA
+                    trial_dur = trial_duration_series.loc[idx] if idx in trial_duration_series.index else pd.NA
+                    block_dur = block_duration_series.loc[idx] if idx in block_duration_series.index else pd.NA
                     
-                    if test_trial_mask.any():
-                        # Replace duration with trial_duration for test_trial rows
-                        event_df.loc[test_trial_mask, 'duration'] = data.loc[test_trial_mask, 'trial_duration'].values
-                        logger.info(f"Used trial_duration instead of stimulus_duration for {test_trial_mask.sum()} test_trial rows")
-            
-            # Handle duration column: use block_duration when it's not null (typically for fmri_wait_block_trigger_end rows)
-            if 'duration' in event_df.columns and 'block_duration' in data.columns:
-                # Convert block_duration to numeric, treating empty strings and 'n/a' as NaN
-                block_duration_series = pd.to_numeric(data['block_duration'], errors='coerce')
+                    # Priority 1: fmri_wait_block_trigger_end with block_duration
+                    if trial_id == 'fmri_wait_block_trigger_end' and pd.notna(block_dur):
+                        new_duration.append(block_dur)
+                    # Priority 2: test_trial rows
+                    elif trial_id == 'test_trial':
+                        if pd.notna(trial_dur):
+                            new_duration.append(trial_dur)
+                        elif pd.notna(stim_dur):
+                            new_duration.append(stim_dur)
+                        else:
+                            new_duration.append('n/a')
+                    # Priority 3: other rows - prefer stimulus_duration, fallback to trial_duration
+                    else:
+                        if pd.notna(stim_dur):
+                            new_duration.append(stim_dur)
+                        elif pd.notna(trial_dur):
+                            new_duration.append(trial_dur)
+                        else:
+                            new_duration.append('n/a')
                 
-                # Create mask for non-null block_duration values
-                block_duration_mask = block_duration_series.notna()
+                event_df['duration'] = new_duration
                 
-                if block_duration_mask.any():
-                    # Replace duration with block_duration for rows where block_duration is not null
-                    event_df.loc[block_duration_mask, 'duration'] = block_duration_series[block_duration_mask].values
-                    logger.info(f"Used block_duration instead of stimulus_duration for {block_duration_mask.sum()} rows with non-null block_duration")
+                # Log statistics
+                trigger_end_count = (trial_id_col == 'fmri_wait_block_trigger_end').sum()
+                test_trial_count = (trial_id_col == 'test_trial').sum()
+                if trigger_end_count > 0:
+                    logger.info(f"Used block_duration for {trigger_end_count} fmri_wait_block_trigger_end rows")
+                if test_trial_count > 0:
+                    logger.info(f"Processed duration for {test_trial_count} test_trial rows")
             
             # Special processing for span tasks - expand list columns
             if task_name in ['opSpan', 'simpleSpan']:
@@ -350,7 +372,8 @@ class EventFileProcessor:
                     if initial_row_mask.any():
                         # Get the initial row index and time_elapsed value BEFORE filtering
                         initial_idx = event_df[initial_row_mask].index[0]
-                        initial_onset = onset_seconds.iloc[initial_idx]
+                        initial_onset = onset_seconds.loc[initial_idx]
+                        logger.debug(f"Found fmri_wait_block_initial at index {initial_idx}, time={initial_onset:.3f}s")
                         
                         # SECOND: Find the trigger row and filter out rows before it
                         trigger_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
