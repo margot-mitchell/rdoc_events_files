@@ -114,7 +114,8 @@ task_specific_columns:
 
   "opOnlySpan":
     "correct_spatial_judgement_key": "correct_response"
-    "grid_symmetry": "trial_type"
+    "grid_symmetry": "grid_symmetry"
+    "condition": "trial_type"
     "response": "response"
 
   "simpleSpan":

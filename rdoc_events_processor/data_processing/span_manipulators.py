@@ -422,6 +422,12 @@ def process_opspan_data(df):
         result_df = sorted_df
         logger.info(f"opSpan: sorted {len(cluster_starts)} clusters of test_trial rows by response_time")
     
+    # Set trial_type based on trial_id for opSpan
+    if 'trial_id' in result_df.columns and 'trial_type' in result_df.columns:
+        result_df.loc[result_df['trial_id'] == 'test_stim', 'trial_type'] = 'span_encoding'
+        result_df.loc[result_df['trial_id'] == 'test_trial', 'trial_type'] = 'span_recall'
+        logger.info(f"opSpan: set trial_type based on trial_id - span_encoding for test_stim, span_recall for test_trial")
+    
     # Calculate accuracy based on correct_cell vs valid_cell_selection
     if 'correct_cell' in result_df.columns and 'valid_cell_selection' in result_df.columns:
         # Initialize acc column if it doesn't exist
@@ -744,6 +750,15 @@ def process_simplespan_data(df):
                 sorted_df.iloc[start:end+1] = cluster_sorted.values
         
         result_df = sorted_df
+    
+    # Set trial_type based on trial_id for simpleSpan
+    if 'trial_id' in result_df.columns and 'trial_type' in result_df.columns:
+        result_df.loc[result_df['trial_id'] == 'test_stim', 'trial_type'] = 'span_encoding'
+        result_df.loc[result_df['trial_id'] == 'test_trial', 'trial_type'] = 'span_recall'
+        # For simpleSpan only: set other trial_id values to n/a
+        other_mask = (~result_df['trial_id'].isin(['test_stim', 'test_trial']))
+        result_df.loc[other_mask, 'trial_type'] = 'n/a'
+        logger.info(f"simpleSpan: set trial_type based on trial_id - span_encoding for test_stim, span_recall for test_trial, n/a for others")
     
     logger.info(f"simpleSpan: processed {len(result_df)} rows from {len(df)} input rows")
     

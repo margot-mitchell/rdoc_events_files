@@ -146,6 +146,16 @@ class EventFileProcessor:
                 
                 new_acc.loc[mask] = 0.0
                 event_data['acc'] = new_acc
+                
+                # Set trial_type for opOnlySpan
+                if 'trial_id' in event_data and 'trial_type' in event_data:
+                    trial_type_series = event_data['trial_type'].copy()
+                    trial_id_series = event_data['trial_id']
+                    # Set to "operation_only" for test_inter-stimulus rows
+                    trial_type_series.loc[trial_id_series == 'test_inter-stimulus'] = 'operation_only'
+                    # Set to "n/a" for all other rows
+                    trial_type_series.loc[trial_id_series != 'test_inter-stimulus'] = 'n/a'
+                    event_data['trial_type'] = trial_type_series
             
             # Special processing for simpleSpan task
             # Calculate accuracy based on valid_cell_selection, invalid_cell_selection, and correct_cell
@@ -281,25 +291,29 @@ class EventFileProcessor:
             # Special processing for opSpan task - modify trial_type based on trial_id
             if task_name == 'opSpan' and 'trial_id' in event_df.columns and 'trial_type' in event_df.columns:
                 trial_id_col = event_df['trial_id']
-                trial_type_col = event_df['trial_type']
                 
                 # Set trial_type based on trial_id
-                # If trial_id = "test_trial" or "test_stim" → trial_type = "span"
-                span_mask = trial_id_col.isin(['test_trial', 'test_stim'])
-                event_df.loc[span_mask, 'trial_type'] = 'span'
+                # If trial_id = "test_stim" → trial_type = "span_encoding"
+                encoding_mask = (trial_id_col == 'test_stim')
+                event_df.loc[encoding_mask, 'trial_type'] = 'span_encoding'
+                
+                # If trial_id = "test_trial" → trial_type = "span_recall"
+                recall_mask = (trial_id_col == 'test_trial')
+                event_df.loc[recall_mask, 'trial_type'] = 'span_recall'
                 
                 # If trial_id = "test_inter-stimulus" → trial_type = "operation"  
                 operation_mask = (trial_id_col == 'test_inter-stimulus')
                 event_df.loc[operation_mask, 'trial_type'] = 'operation'
                 
-                span_count = span_mask.sum()
+                encoding_count = encoding_mask.sum()
+                recall_count = recall_mask.sum()
                 operation_count = operation_mask.sum()
-                if span_count > 0 or operation_count > 0:
-                    logger.info(f"Updated trial_type for opSpan: {span_count} rows set to 'span', {operation_count} rows set to 'operation'")
+                if encoding_count > 0 or recall_count > 0 or operation_count > 0:
+                    logger.info(f"Updated trial_type for opSpan: {encoding_count} rows set to 'span_encoding', {recall_count} rows set to 'span_recall', {operation_count} rows set to 'operation'")
             
             # Special processing for opSpan task
             # For sequences of "span" rows, recalculate onsets based on response_time
-            # A row is in a sequence if row[i] = "span" AND row[i-1] = "span" AND row[i+1] = "span"
+            # A row is in a sequence if row[i] is span_encoding/span_recall AND row[i-1] is span_encoding/span_recall AND row[i+1] is span_encoding/span_recall
             if task_name == 'opSpan':
                 if 'trial_type' in event_df.columns and 'onset' in event_df.columns and 'response_time' in event_df.columns:
                     trial_type_col = event_df['trial_type']
@@ -313,8 +327,8 @@ class EventFileProcessor:
                     response_time_numeric = pd.to_numeric(response_time_col, errors='coerce')
                     
                     # Identify which rows are part of a "span" sequence
-                    # A row is in a sequence if it's a "span" row and part of consecutive "span" rows
-                    is_span = (trial_type_col == 'span')
+                    # A row is in a sequence if it's a "span_encoding" or "span_recall" row and part of consecutive span rows
+                    is_span = trial_type_col.isin(['span_encoding', 'span_recall'])
                     in_sequence = pd.Series([False] * len(event_df), index=event_df.index)
                     
                     # Find all consecutive "span" sequences (including single "span" rows)

@@ -1,0 +1,27 @@
+# Download configuration for RDOC data from Dropbox
+# This file can be used to customize download settings
+
+# Remote configuration
+remote:
+  name: "dropbox"  # Name of the rclone remote
+  path: "RDOC_fMRI_Events"  # Path in Dropbox
+
+# Local configuration  
+local:
+  path: "dropbox_bids"  # Local directory to download to
+
+# Download settings
+download:
+  transfers: 4  # Number of parallel transfers
+  checkers: 8   # Number of checkers
+  progress: true  # Show progress during download
+
+# Default subjects (can be overridden via CLI)
+default_subjects:
+  - "s4"
+  - "s5"
+  - "s6"
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
