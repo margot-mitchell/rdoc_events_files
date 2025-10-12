@@ -122,6 +122,8 @@ def process_opspan_data(df):
        and extra_responses_timestamps, create additional rows for each item
     4. correct_cell_order items from input appear in correct_cell column
     5. cell_order_through_grid items from input appear in cell_movement column
+    6. valid_responses items appear in valid_cell_selection column
+    7. duplicate_responses and extra_responses items appear in invalid_cell_selection column
     
     Args:
         df (pd.DataFrame): Input opSpan dataframe
@@ -130,7 +132,7 @@ def process_opspan_data(df):
         pd.DataFrame: Processed dataframe with expanded rows
     """
     # Ensure required output columns exist
-    required_output_columns = ['valid_cell_selection', 'correct_cell', 'cell_movement']
+    required_output_columns = ['valid_cell_selection', 'invalid_cell_selection', 'correct_cell', 'cell_movement']
     for col in required_output_columns:
         if col not in df.columns:
             df[col] = 'n/a'
@@ -177,6 +179,11 @@ def process_opspan_data(df):
                 new_row['duplicate_responses_timestamps'] = ''
                 new_row['extra_responses_timestamps'] = ''
                 
+                # Set non-relevant columns to n/a for movement rows
+                new_row['valid_cell_selection'] = 'n/a'
+                new_row['invalid_cell_selection'] = 'n/a'
+                new_row['correct_cell'] = 'n/a'
+                
                 expanded_rows.append(new_row)
         
         # Rule 3 & 4: Handle valid_responses with correct_navigation_response alignment
@@ -214,6 +221,10 @@ def process_opspan_data(df):
                     new_row['extra_responses'] = ''
                     new_row['extra_responses_timestamps'] = ''
                     
+                    # Set non-relevant columns to n/a for valid response rows
+                    new_row['invalid_cell_selection'] = 'n/a'
+                    new_row['cell_movement'] = 'n/a'
+                    
                     expanded_rows.append(new_row)
             else:
                 # No correct_navigation_response, just add rows for valid_responses
@@ -233,6 +244,11 @@ def process_opspan_data(df):
                     new_row['duplicate_responses_timestamps'] = ''
                     new_row['extra_responses'] = ''
                     new_row['extra_responses_timestamps'] = ''
+                    
+                    # Set non-relevant columns to n/a for valid response rows
+                    new_row['invalid_cell_selection'] = 'n/a'
+                    new_row['cell_movement'] = 'n/a'
+                    
                     expanded_rows.append(new_row)
         
         # Rule 3: Add rows for duplicate_responses
@@ -240,7 +256,7 @@ def process_opspan_data(df):
             for i, response in enumerate(duplicate_responses):
                 new_row = row.copy()
                 new_row['duplicate_responses'] = str(response)
-                new_row['grid_response'] = str(response)  # Use actual response value
+                new_row['invalid_cell_selection'] = str(response)  # Map to invalid_cell_selection
                 if i < len(duplicate_responses_timestamps):
                     new_row['response_time'] = str(duplicate_responses_timestamps[i])  # Use corresponding timestamp
                     new_row['duplicate_responses_timestamps'] = str(duplicate_responses_timestamps[i])
@@ -253,6 +269,12 @@ def process_opspan_data(df):
                 new_row['valid_responses_timestamps'] = ''
                 new_row['extra_responses'] = ''
                 new_row['extra_responses_timestamps'] = ''
+                
+                # Set non-relevant columns to n/a for invalid response rows
+                new_row['valid_cell_selection'] = 'n/a'
+                new_row['correct_cell'] = 'n/a'
+                new_row['cell_movement'] = 'n/a'
+                
                 expanded_rows.append(new_row)
         
         # Rule 3: Add rows for extra_responses
@@ -260,7 +282,7 @@ def process_opspan_data(df):
             for i, response in enumerate(extra_responses):
                 new_row = row.copy()
                 new_row['extra_responses'] = str(response)
-                new_row['grid_response'] = str(response)  # Use actual response value
+                new_row['invalid_cell_selection'] = str(response)  # Map to invalid_cell_selection
                 if i < len(extra_responses_timestamps):
                     new_row['response_time'] = str(extra_responses_timestamps[i])  # Use corresponding timestamp
                     new_row['extra_responses_timestamps'] = str(extra_responses_timestamps[i])
@@ -273,6 +295,12 @@ def process_opspan_data(df):
                 new_row['valid_responses_timestamps'] = ''
                 new_row['duplicate_responses'] = ''
                 new_row['duplicate_responses_timestamps'] = ''
+                
+                # Set non-relevant columns to n/a for invalid response rows
+                new_row['valid_cell_selection'] = 'n/a'
+                new_row['correct_cell'] = 'n/a'
+                new_row['cell_movement'] = 'n/a'
+                
                 expanded_rows.append(new_row)
         
         # Handle correct_cell_order alignment - map to correct_cell column (same logic as simpleSpan)
@@ -311,6 +339,7 @@ def process_opspan_data(df):
                     
                     # Set non-relevant columns to n/a for correct_cell_order rows
                     new_row['valid_cell_selection'] = 'n/a'
+                    new_row['invalid_cell_selection'] = 'n/a'
                     new_row['cell_movement'] = 'n/a'
                     
                     expanded_rows.append(new_row)
@@ -329,6 +358,11 @@ def process_opspan_data(df):
                 new_row['cell_order_through_grid'] = ''
                 new_row['duplicate_responses_timestamps'] = ''
                 new_row['extra_responses_timestamps'] = ''
+                
+                # Set non-relevant columns to n/a for navigation rows
+                new_row['invalid_cell_selection'] = 'n/a'
+                new_row['cell_movement'] = 'n/a'
+                
                 expanded_rows.append(new_row)
         
         # If no list data, keep original row (but clear list columns)

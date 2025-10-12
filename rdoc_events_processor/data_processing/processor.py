@@ -305,11 +305,16 @@ class EventFileProcessor:
                 operation_mask = (trial_id_col == 'test_inter-stimulus')
                 event_df.loc[operation_mask, 'trial_type'] = 'operation'
                 
+                # If trial_id = "test_ITI" → trial_type = "n/a"
+                iti_mask = (trial_id_col == 'test_ITI')
+                event_df.loc[iti_mask, 'trial_type'] = 'n/a'
+                
                 encoding_count = encoding_mask.sum()
                 recall_count = recall_mask.sum()
                 operation_count = operation_mask.sum()
-                if encoding_count > 0 or recall_count > 0 or operation_count > 0:
-                    logger.info(f"Updated trial_type for opSpan: {encoding_count} rows set to 'span_encoding', {recall_count} rows set to 'span_recall', {operation_count} rows set to 'operation'")
+                iti_count = iti_mask.sum()
+                if encoding_count > 0 or recall_count > 0 or operation_count > 0 or iti_count > 0:
+                    logger.info(f"Updated trial_type for opSpan: {encoding_count} rows set to 'span_encoding', {recall_count} rows set to 'span_recall', {operation_count} rows set to 'operation', {iti_count} rows set to 'n/a'")
             
             # Special processing for opSpan task
             # For sequences of "span" rows, recalculate onsets based on response_time
@@ -542,7 +547,7 @@ class EventFileProcessor:
                     if initial_row_mask.any():
                         # Get the initial row index and time_elapsed value BEFORE filtering
                         initial_idx = event_df[initial_row_mask].index[0]
-                        initial_onset = onset_seconds.iloc[initial_idx]
+                        initial_onset = onset_seconds.loc[initial_idx]
                         
                         # SECOND: Find the trigger row and filter out rows before it
                         trigger_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
@@ -808,6 +813,61 @@ class EventFileProcessor:
             if 'float_precision' in output_settings:
                 float_cols = event_df.select_dtypes(include=['float64']).columns
                 event_df[float_cols] = event_df[float_cols].round(output_settings['float_precision'])
+            
+            # Final reordering: For opSpan and simpleSpan, reorder test_ITI rows by onset
+            if task_name in ['opSpan', 'simpleSpan']:
+                if 'trial_id' in event_df.columns and 'onset' in event_df.columns:
+                    # Find all test_ITI rows
+                    test_iti_mask = event_df['trial_id'] == 'test_ITI'
+                    
+                    if test_iti_mask.any():
+                        # Get indices of test_ITI rows
+                        iti_indices = event_df[test_iti_mask].index.tolist()
+                        
+                        # Extract test_ITI rows and sort them by onset
+                        iti_rows = event_df.loc[iti_indices].copy()
+                        iti_rows_sorted = iti_rows.sort_values('onset')
+                        
+                        # Remove test_ITI rows from original dataframe
+                        non_iti_df = event_df[~test_iti_mask].copy()
+                        
+                        # For each sorted ITI row, find where to insert it based on onset
+                        # We'll rebuild the dataframe by interleaving ITI rows in correct onset order
+                        result_rows = []
+                        non_iti_idx = 0
+                        iti_sorted_list = iti_rows_sorted.to_dict('records')
+                        iti_sorted_onsets = iti_rows_sorted['onset'].tolist()
+                        iti_idx = 0
+                        
+                        non_iti_list = non_iti_df.to_dict('records')
+                        non_iti_onsets = non_iti_df['onset'].tolist()
+                        
+                        # Merge the two lists by onset order
+                        while non_iti_idx < len(non_iti_list) or iti_idx < len(iti_sorted_list):
+                            # If we've exhausted non-ITI rows, add remaining ITI rows
+                            if non_iti_idx >= len(non_iti_list):
+                                result_rows.extend(iti_sorted_list[iti_idx:])
+                                break
+                            
+                            # If we've exhausted ITI rows, add remaining non-ITI rows
+                            if iti_idx >= len(iti_sorted_list):
+                                result_rows.extend(non_iti_list[non_iti_idx:])
+                                break
+                            
+                            # Compare onsets and add the row with smaller onset
+                            non_iti_onset = pd.to_numeric(non_iti_onsets[non_iti_idx], errors='coerce')
+                            iti_onset = pd.to_numeric(iti_sorted_onsets[iti_idx], errors='coerce')
+                            
+                            if pd.isna(non_iti_onset) or (not pd.isna(iti_onset) and iti_onset < non_iti_onset):
+                                result_rows.append(iti_sorted_list[iti_idx])
+                                iti_idx += 1
+                            else:
+                                result_rows.append(non_iti_list[non_iti_idx])
+                                non_iti_idx += 1
+                        
+                        # Reconstruct the dataframe
+                        event_df = pd.DataFrame(result_rows).reset_index(drop=True)
+                        logger.info(f"Reordered {test_iti_mask.sum()} test_ITI rows by onset for {task_name} task")
             
             # Save file
             file_format = output_settings.get('file_format', 'tsv')

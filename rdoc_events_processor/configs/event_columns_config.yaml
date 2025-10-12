@@ -110,7 +110,7 @@ task_specific_columns:
     "duplicate_responses": "duplicate_responses"  # needed for processing but dropped from output
     "extra_responses": "extra_responses"  # needed for processing but dropped from output
     "correct_cell_order": "correct_cell_order"  # needed for processing but dropped from output
-    # Note: valid_cell_selection and correct_cell are created by span processing
+    # Note: valid_cell_selection, invalid_cell_selection, correct_cell, and cell_movement are created by span processing
 
   "opOnlySpan":
     "correct_spatial_judgement_key": "correct_response"
