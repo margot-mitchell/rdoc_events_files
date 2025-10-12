@@ -99,7 +99,9 @@ task_specific_columns:
     "correct_spatial_judgement_key": "correct_response"
     "grid_symmetry": "grid_symmetry"
     "spatial_location": "spatial_location"
-    "condition": "trial_type"
+    "condition": "trial_type" # manipulated to set "span" for span trials (dropbox has "operation" for ALL rows)
+    "moving_through_grid_timestamps": "moving_through_grid_timestamps"  # needed for processing but dropped from output
+    "cell_order_through_grid": "cell_order_through_grid"  # needed for processing but dropped from output
     "valid_responses_timestamps": "valid_responses_timestamps"  # needed for processing but dropped from output
     "duplicate_responses_timestamps": "duplicate_responses_timestamps"  # needed for processing but dropped from output
     "extra_responses_timestamps": "extra_responses_timestamps"  # needed for processing but dropped from output
@@ -108,6 +110,7 @@ task_specific_columns:
     "duplicate_responses": "duplicate_responses"  # needed for processing but dropped from output
     "extra_responses": "extra_responses"  # needed for processing but dropped from output
     "correct_cell_order": "correct_cell_order"  # needed for processing but dropped from output
+    # Note: valid_cell_selection and correct_cell are created by span processing
 
   "opOnlySpan":
     "correct_spatial_judgement_key": "correct_response"
@@ -133,6 +136,8 @@ task_specific_columns:
 # Columns to exclude from specific tasks
 exclude_columns_by_task:
   "opSpan":
+    - "moving_through_grid_timestamps"
+    - "cell_order_through_grid"
     - "extra_responses_timestamps"
     - "duplicate_responses_timestamps"
     - "valid_responses_timestamps"

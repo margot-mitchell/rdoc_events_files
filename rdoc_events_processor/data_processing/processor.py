@@ -278,6 +278,193 @@ class EventFileProcessor:
                 logger.info(f"Processing span task data for {task_name}")
                 event_df = process_span_data_for_events(event_df, task_name)
             
+            # Special processing for opSpan task - modify trial_type based on trial_id
+            if task_name == 'opSpan' and 'trial_id' in event_df.columns and 'trial_type' in event_df.columns:
+                trial_id_col = event_df['trial_id']
+                trial_type_col = event_df['trial_type']
+                
+                # Set trial_type based on trial_id
+                # If trial_id = "test_trial" or "test_stim" → trial_type = "span"
+                span_mask = trial_id_col.isin(['test_trial', 'test_stim'])
+                event_df.loc[span_mask, 'trial_type'] = 'span'
+                
+                # If trial_id = "test_inter-stimulus" → trial_type = "operation"  
+                operation_mask = (trial_id_col == 'test_inter-stimulus')
+                event_df.loc[operation_mask, 'trial_type'] = 'operation'
+                
+                span_count = span_mask.sum()
+                operation_count = operation_mask.sum()
+                if span_count > 0 or operation_count > 0:
+                    logger.info(f"Updated trial_type for opSpan: {span_count} rows set to 'span', {operation_count} rows set to 'operation'")
+            
+            # Special processing for opSpan task
+            # For sequences of "span" rows, recalculate onsets based on response_time
+            # A row is in a sequence if row[i] = "span" AND row[i-1] = "span" AND row[i+1] = "span"
+            if task_name == 'opSpan':
+                if 'trial_type' in event_df.columns and 'onset' in event_df.columns and 'response_time' in event_df.columns:
+                    trial_type_col = event_df['trial_type']
+                    
+                    # Ensure onset column is float type to avoid dtype warnings
+                    event_df['onset'] = pd.to_numeric(event_df['onset'], errors='coerce')
+                    onset_col = event_df['onset'].copy()
+                    response_time_col = event_df['response_time']
+                    
+                    # Convert response_time to numeric (already in seconds in BIDS files)
+                    response_time_numeric = pd.to_numeric(response_time_col, errors='coerce')
+                    
+                    # Identify which rows are part of a "span" sequence
+                    # A row is in a sequence if it's a "span" row and part of consecutive "span" rows
+                    is_span = (trial_type_col == 'span')
+                    in_sequence = pd.Series([False] * len(event_df), index=event_df.index)
+                    
+                    # Find all consecutive "span" sequences (including single "span" rows)
+                    i = 0
+                    while i < len(event_df):
+                        if is_span.iloc[i]:
+                            # Found the start of a "span" sequence
+                            sequence_start = i
+                            sequence_end = i
+                            
+                            # Find the end of this sequence (consecutive "span" rows)
+                            while sequence_end < len(event_df) and is_span.iloc[sequence_end]:
+                                sequence_end += 1
+                            sequence_end -= 1  # Back up to the last "span" row
+                            
+                            # Mark all rows in this sequence as being in a sequence
+                            for j in range(sequence_start, sequence_end + 1):
+                                in_sequence.iloc[j] = True
+                            
+                            # Move to the next row after this sequence
+                            i = sequence_end + 1
+                        else:
+                            i += 1
+                    
+                    # Now find the sequences and process them (already found above, but collect them)
+                    sequences_found = []
+                    i = 0
+                    while i < len(event_df):
+                        if is_span.iloc[i]:
+                            # Found the start of a "span" sequence
+                            sequence_start = i
+                            sequence_end = i
+                            
+                            # Find the end of this sequence (consecutive "span" rows)
+                            while sequence_end < len(event_df) and is_span.iloc[sequence_end]:
+                                sequence_end += 1
+                            sequence_end -= 1  # Back up to the last "span" row
+                            
+                            # Store this sequence
+                            sequences_found.append((sequence_start, sequence_end))
+                            
+                            # Move to the next row after this sequence
+                            i = sequence_end + 1
+                        else:
+                            i += 1
+                    
+                    # Process each sequence
+                    rows_modified = 0
+                    for seq_idx, (seq_start, seq_end) in enumerate(sequences_found):
+                        # For all rows in the sequence (including the first row):
+                        # First row: onset[i] = onset[i-1] + response_time[i-1]
+                        # Other rows: onset[i] = onset[i-1] + (response_time[i-1] - response_time[i-2])
+                        for j in range(seq_start, seq_end + 1):
+                            if j > 0:  # Make sure we're not at the very first row of the entire dataframe
+                                prev_onset = onset_col.iloc[j - 1]
+                                rt_prev = response_time_numeric.iloc[j - 1]
+                                
+                                if pd.notna(rt_prev):
+                                    if j == seq_start:
+                                        # First row in sequence: onset[i] = onset[i-1] + response_time[i-1]
+                                        new_onset = prev_onset + rt_prev
+                                    else:
+                                        # Other rows: onset[i] = onset[i-1] + (response_time[i-1] - response_time[i-2])
+                                        if j > 1:  # Make sure we can access i-2
+                                            rt_prev_prev = response_time_numeric.iloc[j - 2]
+                                            if pd.notna(rt_prev_prev):
+                                                # Get the most recently calculated onset for row j-1
+                                                prev_onset_updated = event_df.loc[j - 1, 'onset']
+                                                new_onset = prev_onset_updated + (rt_prev - rt_prev_prev)
+                                            else:
+                                                # If rt[i-2] is missing, fall back to simple addition
+                                                prev_onset_updated = event_df.loc[j - 1, 'onset']
+                                                new_onset = prev_onset_updated + rt_prev
+                                        else:
+                                            # Edge case: can't access i-2, use simple addition
+                                            new_onset = prev_onset + rt_prev
+                                    
+                                    event_df.loc[j, 'onset'] = round(new_onset, 5)
+                                    rows_modified += 1
+                        
+                        # Also modify the row that comes RIGHT AFTER the sequence
+                        # onset[row_after] = onset[last_row_in_seq] + (response_time[last_row] - response_time[second_to_last_row])
+                        row_after_seq = seq_end + 1
+                        if row_after_seq < len(event_df) and seq_end > 0:
+                            # Get response times for the last two rows of the sequence
+                            rt_last = response_time_numeric.iloc[seq_end]
+                            rt_second_to_last = response_time_numeric.iloc[seq_end - 1]
+                            
+                            if pd.notna(rt_last) and pd.notna(rt_second_to_last):
+                                # Get the updated onset for the last row in the sequence
+                                last_onset_updated = event_df.loc[seq_end, 'onset']
+                                new_onset = last_onset_updated + (rt_last - rt_second_to_last)
+                                event_df.loc[row_after_seq, 'onset'] = round(new_onset, 5)
+                                rows_modified += 1
+                    
+                    if rows_modified > 0:
+                        logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} span sequences in opSpan task")
+                    
+                    # Reorder ALL "span" rows by onset (regardless of whether onsets were recalculated)
+                    if 'onset' in event_df.columns and 'trial_type' in event_df.columns:
+                        # Reorder each sequence of "span" rows by onset
+                        span_rows_reordered = 0
+                        for seq_start, seq_end in sequences_found:
+                            if seq_end > seq_start:  # Only reorder if sequence has more than 1 row
+                                # Get the sequence rows
+                                sequence_rows = event_df.loc[seq_start:seq_end].copy()
+                                
+                                # Sort by onset
+                                sequence_rows_sorted = sequence_rows.sort_values('onset').reset_index(drop=True)
+                                
+                                # Update the original dataframe
+                                event_df.loc[seq_start:seq_end] = sequence_rows_sorted.values
+                                span_rows_reordered += (seq_end - seq_start + 1)
+                        
+                        if span_rows_reordered > 0:
+                            logger.info(f"Reordered {span_rows_reordered} span rows by onset in {len(sequences_found)} sequences in opSpan task")
+                    
+                    # Check if rows are in increasing order of onset and reorder if needed
+                    if 'onset' in event_df.columns and 'trial_type' in event_df.columns:
+                        onset_values = pd.to_numeric(event_df['onset'], errors='coerce')
+                        
+                        # Check if onset values are strictly increasing
+                        is_increasing = onset_values.is_monotonic_increasing
+                        
+                        if not is_increasing:
+                            # Find rows that are out of order
+                            out_of_order_indices = []
+                            for i in range(len(onset_values) - 1):
+                                if pd.notna(onset_values.iloc[i]) and pd.notna(onset_values.iloc[i + 1]):
+                                    if onset_values.iloc[i] > onset_values.iloc[i + 1]:
+                                        out_of_order_indices.extend([i, i + 1])
+                            
+                            # Check which out-of-order rows are not test_ITI or test_inter-stim
+                            problematic_rows = []
+                            for idx in set(out_of_order_indices):
+                                trial_type = event_df.iloc[idx].get('trial_type', '')
+                                if trial_type not in ['operation']:  # operation is equivalent to test_inter-stim for opSpan
+                                    problematic_rows.append({
+                                        'index': idx,
+                                        'trial_type': trial_type,
+                                        'onset': onset_values.iloc[idx]
+                                    })
+                            
+                            if problematic_rows:
+                                logger.warning(f"Found {len(problematic_rows)} non-operation rows out of onset order: {problematic_rows}")
+                            else:
+                                # Only reorder if all out-of-order rows are operation rows
+                                event_df = event_df.sort_values('onset').reset_index(drop=True)
+                                logger.info("Reordered opSpan rows by onset values (only operation rows were out of order)")
+            
             # Calculate accuracy for simpleSpan after span processing
             if task_name == 'simpleSpan':
                 # Calculate accuracy based on valid_cell_selection, invalid_cell_selection, and correct_cell
