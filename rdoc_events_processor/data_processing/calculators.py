@@ -140,3 +140,29 @@ def calculate_go_nogo_condition(row):
         return 'go'
     
     return 'n/a'
+
+
+def calculate_stop_signal_condition(trial_type_value):
+    """
+    Calculate stop_signal_condition for stopSignal task based on trial_type.
+    
+    Args:
+        trial_type_value (str): The trial_type value
+        
+    Returns:
+        str: 'stop', 'go', or 'n/a'
+    """
+    # If trial_type is n/a or empty, return n/a
+    if pd.isna(trial_type_value) or trial_type_value == '' or trial_type_value == 'n/a':
+        return 'n/a'
+    
+    # If trial_type is stop_failure or stop_success, return stop
+    if trial_type_value in ['stop_failure', 'stop_success']:
+        return 'stop'
+    
+    # If trial_type is go_success or go_failure, return go
+    if trial_type_value in ['go_success', 'go_failure']:
+        return 'go'
+    
+    # For any other value, return n/a
+    return 'n/a'

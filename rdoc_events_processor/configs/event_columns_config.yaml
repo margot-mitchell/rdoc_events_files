@@ -62,11 +62,9 @@ task_specific_columns:
     "SSD": "SSDelay"
     "SS_duration": "SS_duration"
     "stim": "stim"
-    "condition": "stop_signal_condition"
     "correct_response": "correct_response"
     "response": "key_press"
-    "condition": "trial_type"
-    # Note: stop_acc and go_acc are calculated and appended to rdoc columns
+    # Note: trial_type, stop_signal_condition, stop_accuracy, and go_accuracy are calculated and appended to rdoc columns
 
   axCPT:
     "cue_letter": "cue_letter"
@@ -119,7 +117,6 @@ task_specific_columns:
   "simpleSpan":
     "spatial_location": "spatial_location"
     "condition": "trial_type"
-    "response": "response"
     # Add the required input columns for processing
     "moving_through_grid_timestamps": "moving_through_grid_timestamps"  # needed for processing but dropped from output
     "cell_order_through_grid": "cell_order_through_grid"  # needed for processing but dropped from output
