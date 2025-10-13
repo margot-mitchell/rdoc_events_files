@@ -284,7 +284,7 @@ class EventFileProcessor:
             # Create DataFrame
             event_df = pd.DataFrame(event_data)
             
-            # Handle duration column: use trial_duration when appropriate
+            # Handle duration column: use trial_duration or block_duration when appropriate
             if 'duration' in event_df.columns and 'trial_id' in event_df.columns:
                 # Check if we have trial_duration available in the original data
                 if 'trial_duration' in data.columns:
@@ -318,6 +318,14 @@ class EventFileProcessor:
                         test_trial_count = test_trial_mask.sum()
                         fallback_count = (use_trial_duration_mask & ~test_trial_mask).sum()
                         logger.info(f"Used trial_duration for {use_trial_duration_mask.sum()} rows: {test_trial_count} test_trial rows, {fallback_count} rows with n/a stimulus/block duration")
+                
+                # Use block_duration when it's not null (typically 1 row per file)
+                if 'block_duration' in data.columns:
+                    block_duration_not_na = data['block_duration'].notna() & (data['block_duration'] != 'n/a') & (data['block_duration'] != '')
+                    if block_duration_not_na.any():
+                        event_df.loc[block_duration_not_na, 'duration'] = data.loc[block_duration_not_na, 'block_duration'].values
+                        block_duration_count = block_duration_not_na.sum()
+                        logger.info(f"Used block_duration for {block_duration_count} row(s) where block_duration is not null")
             
             # Special processing for span tasks - expand list columns
             if task_name in ['opSpan', 'simpleSpan']:
