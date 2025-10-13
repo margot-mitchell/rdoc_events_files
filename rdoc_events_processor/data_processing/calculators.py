@@ -122,22 +122,26 @@ def calculate_go_nogo_condition(row):
         row: DataFrame row with condition and correct_trial columns from BIDS data
         
     Returns:
-        str: 'go', 'nogo_success', or 'n/a'
+        str: 'go_success', 'go_failure', 'nogo_success', 'nogo_failure', or 'n/a'
     """
     condition = row.get('condition', '')
     correct_trial = row.get('correct_trial', None)
     
-    # If either is null/empty, return n/a
-    if pd.isna(condition) or condition == '' or pd.isna(correct_trial):
+    # If condition is null/empty, return n/a
+    if pd.isna(condition) or condition == '':
         return 'n/a'
     
     # Determine go_nogo_condition based on condition and correctness
-    if condition == 'go' and correct_trial == 1.0:
-        return 'go'
-    elif condition == 'nogo' and correct_trial == 1.0:
-        return 'nogo_success'
-    elif condition == 'go' and correct_trial == 0.0:
-        return 'go'
+    if condition == 'go':
+        if correct_trial == 1.0:
+            return 'go_success'
+        elif correct_trial == 0.0:
+            return 'go_failure'
+    elif condition == 'nogo':
+        if correct_trial == 1.0:
+            return 'nogo_success'
+        elif correct_trial == 0.0:
+            return 'nogo_failure'
     
     return 'n/a'
 
