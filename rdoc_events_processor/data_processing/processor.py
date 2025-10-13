@@ -126,7 +126,7 @@ class EventFileProcessor:
                 event_data['go_nogo_condition'] = data.apply(calculate_go_nogo_condition, axis=1)
             
             # Special processing for opOnlySpan task
-            # Calculate acc for rows where correct_trial is empty: if correct_response is not empty but response is n/a, make acc = 0.0
+            # Calculate acc based on correct_response vs response
             if task_name == 'opOnlySpan':
                 # Get the original correct_trial column from input data
                 original_correct_trial = data.get('correct_trial', pd.Series())
@@ -137,14 +137,27 @@ class EventFileProcessor:
                 # Create new acc series starting with original correct_trial values
                 new_acc = original_correct_trial.copy()
                 
-                # For rows where correct_trial is empty/NaN but correct_response is not empty and response is n/a, set acc = 0.0
-                mask = (
+                # Case 1: When both correct_response and response are present (not n/a), calculate acc based on match
+                both_present_mask = (
+                    (correct_response.notna() & (correct_response != '') & (correct_response != 'n/a')) &
+                    (response.notna() & (response != '') & (response != 'n/a'))
+                )
+                
+                # For rows where both are present, compare them
+                for idx in new_acc[both_present_mask].index:
+                    if str(correct_response.loc[idx]).strip() == str(response.loc[idx]).strip():
+                        new_acc.loc[idx] = 1.0
+                    else:
+                        new_acc.loc[idx] = 0.0
+                
+                # Case 2: When correct_trial is empty/NaN but correct_response is not empty and response is n/a, set acc = 0.0
+                no_response_mask = (
                     (original_correct_trial.isna() | (original_correct_trial == '') | (original_correct_trial == 'n/a')) &  # correct_trial is empty in input
                     (correct_response.notna() & (correct_response != '') & (correct_response != 'n/a')) &  # correct_response is not empty
                     (response.isna() | (response == '') | (response == 'n/a'))  # response is n/a
                 )
                 
-                new_acc.loc[mask] = 0.0
+                new_acc.loc[no_response_mask] = 0.0
                 event_data['acc'] = new_acc
                 
                 # Set trial_type for opOnlySpan
@@ -271,17 +284,40 @@ class EventFileProcessor:
             # Create DataFrame
             event_df = pd.DataFrame(event_data)
             
-            # Handle duration column: use trial_duration instead of stimulus_duration for test_trial rows
+            # Handle duration column: use trial_duration when appropriate
             if 'duration' in event_df.columns and 'trial_id' in event_df.columns:
                 # Check if we have trial_duration available in the original data
                 if 'trial_duration' in data.columns:
                     trial_id_col = event_df['trial_id']
+                    duration_col = event_df['duration']
+                    trial_duration_col = data['trial_duration']
+                    
+                    # Condition 1: test_trial rows always use trial_duration
                     test_trial_mask = (trial_id_col == 'test_trial')
                     
-                    if test_trial_mask.any():
-                        # Replace duration with trial_duration for test_trial rows
-                        event_df.loc[test_trial_mask, 'duration'] = data.loc[test_trial_mask, 'trial_duration'].values
-                        logger.info(f"Used trial_duration instead of stimulus_duration for {test_trial_mask.sum()} test_trial rows")
+                    # Condition 2: both block_duration and stimulus_duration are n/a, but trial_duration is not
+                    # Check if stimulus_duration (mapped to duration) is n/a
+                    stimulus_duration_na = duration_col.isna() | (duration_col == 'n/a') | (duration_col == '')
+                    
+                    # Check if block_duration is n/a (if it exists in data)
+                    if 'block_duration' in data.columns:
+                        block_duration_na = data['block_duration'].isna() | (data['block_duration'] == 'n/a') | (data['block_duration'] == '')
+                    else:
+                        # If block_duration doesn't exist, treat as n/a
+                        block_duration_na = pd.Series([True] * len(data), index=data.index)
+                    
+                    # Check if trial_duration is not n/a
+                    trial_duration_not_na = trial_duration_col.notna() & (trial_duration_col != 'n/a') & (trial_duration_col != '')
+                    
+                    # Combine conditions: test_trial OR (both durations n/a AND trial_duration not n/a)
+                    use_trial_duration_mask = test_trial_mask | (stimulus_duration_na & block_duration_na & trial_duration_not_na)
+                    
+                    if use_trial_duration_mask.any():
+                        # Replace duration with trial_duration for matching rows
+                        event_df.loc[use_trial_duration_mask, 'duration'] = data.loc[use_trial_duration_mask, 'trial_duration'].values
+                        test_trial_count = test_trial_mask.sum()
+                        fallback_count = (use_trial_duration_mask & ~test_trial_mask).sum()
+                        logger.info(f"Used trial_duration for {use_trial_duration_mask.sum()} rows: {test_trial_count} test_trial rows, {fallback_count} rows with n/a stimulus/block duration")
             
             # Special processing for span tasks - expand list columns
             if task_name in ['opSpan', 'simpleSpan']:
@@ -930,22 +966,37 @@ class EventFileProcessor:
                 func_dir = session_dir / 'func'
                 
                 if func_dir.exists():
-                    # Create output directory for this subject and session
-                    subject_output_dir = Path(output_dir) / f"sub-{subject_id}" / f"ses-{session_id}"
-                    subject_output_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    # Process each CSV file in the func directory
+                    # First, collect valid CSV files (excluding prescan, practice, and pretouch files)
+                    valid_files = []
                     for csv_file in func_dir.glob('*.csv'):
                         # Skip prescan files
                         if 'prescan' in csv_file.name.lower():
-                            logger.info(f"Skipping prescan file: {csv_file}")
+                            logger.debug(f"Skipping prescan file: {csv_file}")
                             continue
                             
                         # Skip practice files
                         if 'practice' in csv_file.name.lower():
-                            logger.info(f"Skipping practice file: {csv_file}")
+                            logger.debug(f"Skipping practice file: {csv_file}")
                             continue
-                            
+                        
+                        # Skip pretouch files
+                        if 'pretouch' in csv_file.name.lower():
+                            logger.debug(f"Skipping pretouch file: {csv_file}")
+                            continue
+                        
+                        valid_files.append(csv_file)
+                    
+                    # Only create output directory if there are valid files to process
+                    if not valid_files:
+                        logger.info(f"No valid task files found in {session_dir} (only prescan/practice/pretouch files), skipping directory creation")
+                        continue
+                    
+                    # Create output directory for this subject and session
+                    subject_output_dir = Path(output_dir) / f"sub-{subject_id}" / f"ses-{session_id}"
+                    subject_output_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Process each valid CSV file
+                    for csv_file in valid_files:
                         # Extract task name from filename
                         task_name = self.extract_task_name(csv_file.stem)
                         
