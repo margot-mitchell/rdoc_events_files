@@ -144,6 +144,9 @@ def process_opspan_data(df):
         row = row.copy()
         row['correct_cell'] = 'n/a'
         
+        # Track if we've added the first expanded row for this input row
+        first_row_added = False
+        
         # Parse the list columns
         moving_timestamps_raw = row.get('moving_through_grid_timestamps', '')
         cell_order_raw = row.get('cell_order_through_grid', '')
@@ -183,6 +186,12 @@ def process_opspan_data(df):
                 new_row['valid_cell_selection'] = 'n/a'
                 new_row['invalid_cell_selection'] = 'n/a'
                 new_row['correct_cell'] = 'n/a'
+                
+                # Set response to n/a for all rows EXCEPT the very first expanded row
+                if first_row_added:
+                    new_row['response'] = 'n/a'
+                # If this is the first row, keep the original response value from row.copy()
+                first_row_added = True
                 
                 expanded_rows.append(new_row)
         
@@ -225,6 +234,11 @@ def process_opspan_data(df):
                     new_row['invalid_cell_selection'] = 'n/a'
                     new_row['cell_movement'] = 'n/a'
                     
+                    # Set response to n/a for all rows except the very first expanded row
+                    if first_row_added:
+                        new_row['response'] = 'n/a'
+                    first_row_added = True
+                    
                     expanded_rows.append(new_row)
             else:
                 # No correct_navigation_response, just add rows for valid_responses
@@ -248,6 +262,11 @@ def process_opspan_data(df):
                     # Set non-relevant columns to n/a for valid response rows
                     new_row['invalid_cell_selection'] = 'n/a'
                     new_row['cell_movement'] = 'n/a'
+                    
+                    # Set response to n/a for all rows except the very first expanded row
+                    if first_row_added:
+                        new_row['response'] = 'n/a'
+                    first_row_added = True
                     
                     expanded_rows.append(new_row)
         
@@ -275,6 +294,11 @@ def process_opspan_data(df):
                 new_row['correct_cell'] = 'n/a'
                 new_row['cell_movement'] = 'n/a'
                 
+                # Set response to n/a for all rows except the very first expanded row
+                if first_row_added:
+                    new_row['response'] = 'n/a'
+                first_row_added = True
+                
                 expanded_rows.append(new_row)
         
         # Rule 3: Add rows for extra_responses
@@ -300,6 +324,11 @@ def process_opspan_data(df):
                 new_row['valid_cell_selection'] = 'n/a'
                 new_row['correct_cell'] = 'n/a'
                 new_row['cell_movement'] = 'n/a'
+                
+                # Set response to n/a for all rows except the very first expanded row
+                if first_row_added:
+                    new_row['response'] = 'n/a'
+                first_row_added = True
                 
                 expanded_rows.append(new_row)
         
@@ -342,6 +371,11 @@ def process_opspan_data(df):
                     new_row['invalid_cell_selection'] = 'n/a'
                     new_row['cell_movement'] = 'n/a'
                     
+                    # Set response to n/a for all rows except the very first expanded row
+                    if first_row_added:
+                        new_row['response'] = 'n/a'
+                    first_row_added = True
+                    
                     expanded_rows.append(new_row)
         
         # Handle correct_navigation_response without valid_responses_timestamps
@@ -362,6 +396,11 @@ def process_opspan_data(df):
                 # Set non-relevant columns to n/a for navigation rows
                 new_row['invalid_cell_selection'] = 'n/a'
                 new_row['cell_movement'] = 'n/a'
+                
+                # Set response to n/a for all rows except the very first expanded row
+                if first_row_added:
+                    new_row['response'] = 'n/a'
+                first_row_added = True
                 
                 expanded_rows.append(new_row)
         
@@ -530,6 +569,9 @@ def process_simplespan_data(df):
     expanded_rows = []
     
     for idx, row in df.iterrows():
+        # Track if we've added the first expanded row for this input row
+        first_row_added = False
+        
         # Parse the list columns
         moving_timestamps = parse_list_string(row.get('moving_through_grid_timestamps', ''))
         cell_order = parse_list_string(row.get('cell_order_through_grid', ''))
@@ -568,7 +610,12 @@ def process_simplespan_data(df):
                 new_row['valid_cell_selection'] = 'n/a'
                 new_row['invalid_cell_selection'] = 'n/a'
                 new_row['correct_cell'] = 'n/a'
-                new_row['response'] = 'n/a'
+                
+                # Set response to n/a for all rows except the very first expanded row
+                if first_row_added:
+                    new_row['response'] = 'n/a'
+                # If this is the first row, keep the original response value from row.copy()
+                first_row_added = True
                 
                 expanded_rows.append(new_row)
         
@@ -599,7 +646,11 @@ def process_simplespan_data(df):
                 new_row['invalid_cell_selection'] = 'n/a'
                 new_row['correct_cell'] = 'n/a'
                 new_row['cell_movement'] = 'n/a'
-                new_row['response'] = 'n/a'
+                
+                # Set response to n/a for all rows except the very first expanded row
+                if first_row_added:
+                    new_row['response'] = 'n/a'
+                first_row_added = True
                 
                 expanded_rows.append(new_row)
         
@@ -630,7 +681,11 @@ def process_simplespan_data(df):
                 new_row['valid_cell_selection'] = 'n/a'
                 new_row['correct_cell'] = 'n/a'
                 new_row['cell_movement'] = 'n/a'
-                new_row['response'] = 'n/a'
+                
+                # Set response to n/a for all rows except the very first expanded row
+                if first_row_added:
+                    new_row['response'] = 'n/a'
+                first_row_added = True
                 
                 expanded_rows.append(new_row)
         
@@ -661,7 +716,11 @@ def process_simplespan_data(df):
                 new_row['valid_cell_selection'] = 'n/a'
                 new_row['correct_cell'] = 'n/a'
                 new_row['cell_movement'] = 'n/a'
-                new_row['response'] = 'n/a'
+                
+                # Set response to n/a for all rows except the very first expanded row
+                if first_row_added:
+                    new_row['response'] = 'n/a'
+                first_row_added = True
                 
                 expanded_rows.append(new_row)
         
@@ -703,7 +762,11 @@ def process_simplespan_data(df):
                     new_row['valid_cell_selection'] = 'n/a'
                     new_row['invalid_cell_selection'] = 'n/a'
                     new_row['cell_movement'] = 'n/a'
-                    new_row['response'] = 'n/a'
+                    
+                    # Set response to n/a for all rows except the very first expanded row
+                    if first_row_added:
+                        new_row['response'] = 'n/a'
+                    first_row_added = True
                     
                     expanded_rows.append(new_row)
         
