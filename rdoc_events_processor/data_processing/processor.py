@@ -152,7 +152,7 @@ class EventFileProcessor:
                     trial_type_series = event_data['trial_type'].copy()
                     trial_id_series = event_data['trial_id']
                     # Set to "operation_only" for test_inter-stimulus rows
-                    trial_type_series.loc[trial_id_series == 'test_inter-stimulus'] = 'operation_only'
+                    trial_type_series.loc[trial_id_series == 'test_inter-stimulus'] = 'operation'
                     # Set to "n/a" for all other rows
                     trial_type_series.loc[trial_id_series != 'test_inter-stimulus'] = 'n/a'
                     event_data['trial_type'] = trial_type_series

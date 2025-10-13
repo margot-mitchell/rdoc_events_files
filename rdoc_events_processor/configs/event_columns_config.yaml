@@ -97,6 +97,7 @@ task_specific_columns:
   
   "opSpan":
     "correct_spatial_judgement_key": "correct_response"
+    "response": "response"
     "grid_symmetry": "grid_symmetry"
     "spatial_location": "spatial_location"
     "condition": "trial_type" # manipulated to set "span" for span trials (dropbox has "operation" for ALL rows)
@@ -121,6 +122,7 @@ task_specific_columns:
   "simpleSpan":
     "spatial_location": "spatial_location"
     "condition": "trial_type"
+    "response": "response"
     # Add the required input columns for processing
     "moving_through_grid_timestamps": "moving_through_grid_timestamps"  # needed for processing but dropped from output
     "cell_order_through_grid": "cell_order_through_grid"  # needed for processing but dropped from output
