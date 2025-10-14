@@ -392,20 +392,27 @@ class EventFileProcessor:
                             onset_seconds = onset_seconds.loc[trigger_idx:].reset_index(drop=True)
                             
                             # THIRD: Create onset values using the reference from original fmri_wait_block_initial
-                            # onset[0] = 0.0 (trigger_start)
-                            # onset[1] = time_elapsed[trigger_start] - time_elapsed[fmri_wait_block_initial]
-                            # onset[2] = time_elapsed[trigger_end] - time_elapsed[fmri_wait_block_initial]
-                            # onset[i] = time_elapsed[row i-1] - time_elapsed[fmri_wait_block_initial], etc.
+                            # Formula for all rows: onset[i] = (time_elapsed[row i-1] - time_elapsed[fmri_wait_block_initial]) / 1000
+                            # For row 0 (trigger_start), row i-1 is fmri_wait_block_initial itself
                             # Each row's onset is based on the PREVIOUS row's time_elapsed
-                            shifted_onset = [0.0] + [(onset_seconds.iloc[i-1] - initial_onset) for i in range(1, len(onset_seconds))]
                             
-                            trigger_onset = onset_seconds.iloc[0]
+                            # Apply formula consistently to all rows
+                            shifted_onset = []
+                            for i in range(len(onset_seconds)):
+                                if i == 0:
+                                    # Row before trigger_start is fmri_wait_block_initial
+                                    # onset[0] = (time_elapsed[initial] - time_elapsed[initial]) / 1000 = 0.0
+                                    prev_time = initial_onset
+                                else:
+                                    # Use previous row's time_elapsed
+                                    prev_time = onset_seconds.iloc[i-1]
+                                shifted_onset.append(prev_time - initial_onset)
                             
                             # Round onset values to 5 decimal places
                             shifted_onset = [round(val, 5) for val in shifted_onset]
                             event_df['onset'] = shifted_onset
 
-                            logger.info(f"Removed {trigger_idx} rows before trigger start. Onset[0]=0.0 (trigger_start), subsequent onsets calculated from previous row's time_elapsed minus fmri_wait_block_initial ({initial_onset:.3f}s)")
+                            logger.info(f"Removed {trigger_idx} rows before trigger start. All onsets calculated from previous row's time_elapsed minus fmri_wait_block_initial ({initial_onset:.3f}s)")
                         else:
                             # If no trigger found, this is an error since we should have skipped files without triggers
                             raise ValueError(f"No 'fmri_wait_block_trigger_start' trial_id found in file {output_path.name}. "
@@ -420,7 +427,17 @@ class EventFileProcessor:
                             onset_seconds = onset_seconds.loc[trigger_idx:].reset_index(drop=True)
                             
                             trigger_onset = onset_seconds.iloc[0]
-                            shifted_onset = [0.0] + [(val - trigger_onset) for val in onset_seconds[1:]]
+                            
+                            # Apply formula consistently: onset[i] = (time_elapsed[row i-1] - time_elapsed[trigger_start])
+                            # For row 0, row i-1 is trigger_start itself, so onset[0] = 0.0
+                            shifted_onset = []
+                            for i in range(len(onset_seconds)):
+                                if i == 0:
+                                    # Row before trigger_start is trigger_start itself (no earlier row available)
+                                    prev_time = trigger_onset
+                                else:
+                                    prev_time = onset_seconds.iloc[i-1]
+                                shifted_onset.append(prev_time - trigger_onset)
                             
                             shifted_onset = [round(val, 5) for val in shifted_onset]
                             event_df['onset'] = shifted_onset
