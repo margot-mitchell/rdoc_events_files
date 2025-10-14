@@ -532,20 +532,8 @@ class EventFileProcessor:
                                         rows_modified += 1
                                         logger.debug(f"opSpan: Updated onset for row {j} from {prev_onset_updated:.5f} to {new_onset:.5f}")
                         
-                        # Also modify the row that comes RIGHT AFTER the sequence
-                        # onset[row_after] = onset[last_row_in_seq] + (response_time[last_row] - response_time[second_to_last_row])
-                        row_after_seq = seq_end + 1
-                        if row_after_seq < len(event_df) and seq_end > 0:
-                            # Get response times for the last two rows of the sequence
-                            rt_last = response_time_numeric.iloc[seq_end]
-                            rt_second_to_last = response_time_numeric.iloc[seq_end - 1]
-                            
-                            if pd.notna(rt_last) and pd.notna(rt_second_to_last):
-                                # Get the updated onset for the last row in the sequence
-                                last_onset_updated = event_df.loc[seq_end, 'onset']
-                                new_onset = last_onset_updated + (rt_last - rt_second_to_last)
-                                event_df.loc[row_after_seq, 'onset'] = round(new_onset, 5)
-                                rows_modified += 1
+                        # Note: We do NOT modify the row after the sequence
+                        # test_ITI and other rows should maintain their original time_elapsed-based onsets
                     
                     if rows_modified > 0:
                         logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} span sequences in opSpan task")
@@ -568,39 +556,6 @@ class EventFileProcessor:
                         
                         if span_rows_reordered > 0:
                             logger.info(f"Reordered {span_rows_reordered} span rows by onset in {len(sequences_found)} sequences in opSpan task")
-                    
-                    # Check if rows are in increasing order of onset and reorder if needed
-                    if 'onset' in event_df.columns and 'trial_type' in event_df.columns:
-                        onset_values = pd.to_numeric(event_df['onset'], errors='coerce')
-                        
-                        # Check if onset values are strictly increasing
-                        is_increasing = onset_values.is_monotonic_increasing
-                        
-                        if not is_increasing:
-                            # Find rows that are out of order
-                            out_of_order_indices = []
-                            for i in range(len(onset_values) - 1):
-                                if pd.notna(onset_values.iloc[i]) and pd.notna(onset_values.iloc[i + 1]):
-                                    if onset_values.iloc[i] > onset_values.iloc[i + 1]:
-                                        out_of_order_indices.extend([i, i + 1])
-                            
-                            # Check which out-of-order rows are not test_ITI or test_inter-stim
-                            problematic_rows = []
-                            for idx in set(out_of_order_indices):
-                                trial_type = event_df.iloc[idx].get('trial_type', '')
-                                if trial_type not in ['operation']:  # operation is equivalent to test_inter-stim for opSpan
-                                    problematic_rows.append({
-                                        'index': idx,
-                                        'trial_type': trial_type,
-                                        'onset': onset_values.iloc[idx]
-                                    })
-                            
-                            if problematic_rows:
-                                logger.warning(f"Found {len(problematic_rows)} non-operation rows out of onset order: {problematic_rows}")
-                            else:
-                                # Only reorder if all out-of-order rows are operation rows
-                                event_df = event_df.sort_values('onset').reset_index(drop=True)
-                                logger.info("Reordered opSpan rows by onset values (only operation rows were out of order)")
             
             # Calculate accuracy for simpleSpan after span processing
             if task_name == 'simpleSpan':
@@ -730,56 +685,11 @@ class EventFileProcessor:
                                     event_df.loc[j, 'onset'] = round(new_onset, 5)
                                     rows_modified += 1
                         
-                        # Also modify the row that comes RIGHT AFTER the sequence
-                        # onset[row_after] = onset[last_row_in_seq] + (response_time[last_row] - response_time[second_to_last_row])
-                        row_after_seq = seq_end + 1
-                        if row_after_seq < len(event_df) and seq_end > 0:
-                            # Get response times for the last two rows of the sequence
-                            rt_last = response_time_numeric.iloc[seq_end]
-                            rt_second_to_last = response_time_numeric.iloc[seq_end - 1]
-                            
-                            if pd.notna(rt_last) and pd.notna(rt_second_to_last):
-                                # Get the updated onset for the last row in the sequence
-                                last_onset_updated = event_df.loc[seq_end, 'onset']
-                                new_onset = last_onset_updated + (rt_last - rt_second_to_last)
-                                event_df.loc[row_after_seq, 'onset'] = round(new_onset, 5)
-                                rows_modified += 1
+                        # Note: We do NOT modify the row after the sequence
+                        # test_ITI and other rows should maintain their original time_elapsed-based onsets
                     
                     if rows_modified > 0:
-                        logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} test_trial sequences (including rows after sequences) in simpleSpan task")
-                    
-                    # Check if rows are in increasing order of onset and reorder if needed
-                    if 'onset' in event_df.columns and 'trial_id' in event_df.columns:
-                        onset_values = pd.to_numeric(event_df['onset'], errors='coerce')
-                        
-                        # Check if onset values are strictly increasing
-                        is_increasing = onset_values.is_monotonic_increasing
-                        
-                        if not is_increasing:
-                            # Find rows that are out of order
-                            out_of_order_indices = []
-                            for i in range(len(onset_values) - 1):
-                                if pd.notna(onset_values.iloc[i]) and pd.notna(onset_values.iloc[i + 1]):
-                                    if onset_values.iloc[i] > onset_values.iloc[i + 1]:
-                                        out_of_order_indices.extend([i, i + 1])
-                            
-                            # Check which out-of-order rows are not test_ITI or test_inter-stim
-                            problematic_rows = []
-                            for idx in set(out_of_order_indices):
-                                trial_id = event_df.iloc[idx].get('trial_id', '')
-                                if trial_id not in ['test_ITI', 'test_inter-stim']:
-                                    problematic_rows.append({
-                                        'index': idx,
-                                        'trial_id': trial_id,
-                                        'onset': onset_values.iloc[idx]
-                                    })
-                            
-                            if problematic_rows:
-                                logger.warning(f"Found {len(problematic_rows)} non-ITI/inter-stim rows out of onset order: {problematic_rows}")
-                            else:
-                                # Only reorder if all out-of-order rows are test_ITI or test_inter-stim
-                                event_df = event_df.sort_values('onset').reset_index(drop=True)
-                                logger.info("Reordered simpleSpan rows by onset values (only ITI/inter-stim rows were out of order)")
+                        logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} test_trial sequences in simpleSpan task")
             
             # Special processing for cuedTS task
             # Set correct_response to "n/a" for trials where trial_id = "test_cue"
@@ -863,60 +773,9 @@ class EventFileProcessor:
                 float_cols = event_df.select_dtypes(include=['float64']).columns
                 event_df[float_cols] = event_df[float_cols].round(output_settings['float_precision'])
             
-            # Final reordering: For opSpan and simpleSpan, reorder test_ITI rows by onset
-            if task_name in ['opSpan', 'simpleSpan']:
-                if 'trial_id' in event_df.columns and 'onset' in event_df.columns:
-                    # Find all test_ITI rows
-                    test_iti_mask = event_df['trial_id'] == 'test_ITI'
-                    
-                    if test_iti_mask.any():
-                        # Get indices of test_ITI rows
-                        iti_indices = event_df[test_iti_mask].index.tolist()
-                        
-                        # Extract test_ITI rows and sort them by onset
-                        iti_rows = event_df.loc[iti_indices].copy()
-                        iti_rows_sorted = iti_rows.sort_values('onset')
-                        
-                        # Remove test_ITI rows from original dataframe
-                        non_iti_df = event_df[~test_iti_mask].copy()
-                        
-                        # For each sorted ITI row, find where to insert it based on onset
-                        # We'll rebuild the dataframe by interleaving ITI rows in correct onset order
-                        result_rows = []
-                        non_iti_idx = 0
-                        iti_sorted_list = iti_rows_sorted.to_dict('records')
-                        iti_sorted_onsets = iti_rows_sorted['onset'].tolist()
-                        iti_idx = 0
-                        
-                        non_iti_list = non_iti_df.to_dict('records')
-                        non_iti_onsets = non_iti_df['onset'].tolist()
-                        
-                        # Merge the two lists by onset order
-                        while non_iti_idx < len(non_iti_list) or iti_idx < len(iti_sorted_list):
-                            # If we've exhausted non-ITI rows, add remaining ITI rows
-                            if non_iti_idx >= len(non_iti_list):
-                                result_rows.extend(iti_sorted_list[iti_idx:])
-                                break
-                            
-                            # If we've exhausted ITI rows, add remaining non-ITI rows
-                            if iti_idx >= len(iti_sorted_list):
-                                result_rows.extend(non_iti_list[non_iti_idx:])
-                                break
-                            
-                            # Compare onsets and add the row with smaller onset
-                            non_iti_onset = pd.to_numeric(non_iti_onsets[non_iti_idx], errors='coerce')
-                            iti_onset = pd.to_numeric(iti_sorted_onsets[iti_idx], errors='coerce')
-                            
-                            if pd.isna(non_iti_onset) or (not pd.isna(iti_onset) and iti_onset < non_iti_onset):
-                                result_rows.append(iti_sorted_list[iti_idx])
-                                iti_idx += 1
-                            else:
-                                result_rows.append(non_iti_list[non_iti_idx])
-                                non_iti_idx += 1
-                        
-                        # Reconstruct the dataframe
-                        event_df = pd.DataFrame(result_rows).reset_index(drop=True)
-                        logger.info(f"Reordered {test_iti_mask.sum()} test_ITI rows by onset for {task_name} task")
+            # All rows should now maintain their original order from the input file
+            # (based on time_elapsed), except for rows within span sequences which are
+            # reordered internally by response_time
             
             # Save file
             file_format = output_settings.get('file_format', 'tsv')
