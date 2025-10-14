@@ -71,20 +71,30 @@ class TestStopSignalCalculations:
 class TestGoNoGoCalculations:
     """Test go/no-go task calculations."""
     
-    def test_calculate_go_nogo_condition_go(self):
-        """Test go condition calculation."""
+    def test_calculate_go_nogo_condition_go_success(self):
+        """Test go success condition calculation."""
         row = {'condition': 'go', 'correct_trial': 1.0}
-        assert calculate_go_nogo_condition(row) == 'go'
+        assert calculate_go_nogo_condition(row) == 'go_success'
+    
+    def test_calculate_go_nogo_condition_go_failure(self):
+        """Test go failure condition calculation."""
+        row = {'condition': 'go', 'correct_trial': 0.0}
+        assert calculate_go_nogo_condition(row) == 'go_failure'
     
     def test_calculate_go_nogo_condition_nogo_success(self):
         """Test nogo success condition calculation."""
         row = {'condition': 'nogo', 'correct_trial': 1.0}
         assert calculate_go_nogo_condition(row) == 'nogo_success'
     
-    def test_calculate_go_nogo_condition_go_failure(self):
-        """Test go failure condition calculation."""
-        row = {'condition': 'go', 'correct_trial': 0.0}
-        assert calculate_go_nogo_condition(row) == 'go'
+    def test_calculate_go_nogo_condition_nogo_failure(self):
+        """Test nogo failure condition calculation."""
+        row = {'condition': 'nogo', 'correct_trial': 0.0}
+        assert calculate_go_nogo_condition(row) == 'nogo_failure'
+    
+    def test_calculate_go_nogo_condition_missing_data(self):
+        """Test go_nogo_condition returns n/a for missing data."""
+        row = {'condition': 'go', 'correct_trial': None}
+        assert calculate_go_nogo_condition(row) == 'n/a'
 
 
 class TestCueLetterExtraction:

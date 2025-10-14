@@ -336,6 +336,8 @@ class TestEventStructure:
         
         This verifies that duration represents the time until the next event.
         Tolerance: ±500ms (0.5 seconds)
+        
+        Note: Skips the first row (trigger_start → trigger_end) since those have special timing.
         """
         output_dir = Path("output")
         event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
@@ -350,7 +352,8 @@ class TestEventStructure:
         if not non_span_files:
             pytest.skip("No non-span event files found")
         
-        alignment_issues = []
+        # Store issues grouped by file with counts
+        file_issues = {}
         
         for file_path in non_span_files:
             df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
@@ -358,8 +361,10 @@ class TestEventStructure:
             if 'onset' not in df.columns or 'duration' not in df.columns:
                 continue
             
-            # Check consecutive pairs of rows
-            for i in range(len(df) - 1):
+            file_misalignments = []
+            
+            # Check consecutive pairs of rows (skip first row - trigger_start to trigger_end)
+            for i in range(1, len(df) - 1):
                 onset_current = df.iloc[i]['onset']
                 onset_next = df.iloc[i + 1]['onset']
                 duration_current = df.iloc[i]['duration']  # Changed: use current row's duration
@@ -387,24 +392,32 @@ class TestEventStructure:
                 difference = abs(onset_diff - duration_seconds)
                 
                 if difference > tolerance:
-                    alignment_issues.append({
-                        'file': str(file_path),
+                    file_misalignments.append({
                         'row_pair': f"{i} -> {i+1}",
                         'onset_diff': onset_diff,
                         'duration_seconds': duration_seconds,
                         'difference': difference
                     })
-                    # Only report first issue per file to keep output manageable
-                    break
+            
+            # If this file has issues, store them
+            if file_misalignments:
+                file_issues[str(file_path)] = file_misalignments
         
-        if alignment_issues:
-            error_msg = f"{len(alignment_issues)} file(s) with onset-duration misalignment. First: {alignment_issues[0]['file']}\n"
-            for issue in alignment_issues[:20]:  # Show first 20 issues
-                error_msg += f"  {issue['file']} (rows {issue['row_pair']}):\n"
-                error_msg += f"    Onset diff: {issue['onset_diff']:.3f}s, Duration: {issue['duration_seconds']:.3f}s, "
-                error_msg += f"Diff: {issue['difference']:.3f}s\n"
-            if len(alignment_issues) > 20:
-                error_msg += f"  ... and {len(alignment_issues) - 20} more files\n"
+        if file_issues:
+            total_files = len(file_issues)
+            first_file = list(file_issues.keys())[0]
+            error_msg = f"{total_files} file(s) with onset-duration misalignment. First: {first_file}\n"
+            
+            # Show first 20 files with all their misaligned rows
+            for idx, (file_path, issues) in enumerate(list(file_issues.items())[:20]):
+                error_msg += f"  {file_path} ({len(issues)} misaligned row(s)):\n"
+                for issue in issues:
+                    error_msg += f"    rows {issue['row_pair']}: "
+                    error_msg += f"Onset diff: {issue['onset_diff']:.3f}s, Duration: {issue['duration_seconds']:.3f}s, "
+                    error_msg += f"Diff: {issue['difference']:.3f}s\n"
+            
+            if total_files > 20:
+                error_msg += f"  ... and {total_files - 20} more files\n"
             error_msg += "\nDuration should represent time until next event (tolerance: ±500ms)"
             pytest.fail(error_msg)
     

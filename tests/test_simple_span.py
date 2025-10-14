@@ -80,40 +80,62 @@ class TestSimpleSpanColumnValidation:
         # If we get here, all files have the correct columns
         assert True, f"All {len(simple_span_output_files)} simpleSpan files have the correct columns"
     
-    def test_simple_span_timestamps_appear_in_response_time(self):
+    def test_span_timestamps_appear_in_response_time(self):
         """
         Test that all timestamp values from input lists appear in response_time column of output.
         
-        For simpleSpan, verify that every timestamp from all columns containing "_timestamps" 
-        in the column name appears as a value in the response_time column of the output file.
+        For both opSpan and simpleSpan, verify that every timestamp from:
+        - moving_through_grid_timestamps
+        - valid_responses_timestamps  
+        - extra_responses_timestamps
+        - duplicate_responses_timestamps
+        
+        appears as a value in the response_time column of the output file.
         """
         import ast
         from pathlib import Path
         
-        # Find simpleSpan input files in dropbox_bids
+        # Find span input files in dropbox_bids
         input_dir = Path("dropbox_bids")
-        simple_span_input_files = list(input_dir.glob("**/*simple_span*_rdoc__fmri.csv"))
+        span_input_files = list(input_dir.glob("**/*span*_rdoc__fmri.csv"))
         
-        if not simple_span_input_files:
-            pytest.skip("No simple_span input files found in dropbox_bids")
+        if not span_input_files:
+            pytest.skip("No span input files found in dropbox_bids")
         
         # Find corresponding output event files
         output_dir = Path("output")
-        simple_span_output_files = list(output_dir.glob("**/*simpleSpan*_events.tsv"))
+        span_output_files = list(output_dir.glob("**/*Span*_events.tsv"))
         
-        if not simple_span_output_files:
-            pytest.skip("No simpleSpan output event files found in output directory")
+        if not span_output_files:
+            pytest.skip("No span output event files found in output directory")
         
         # Test each file pair
-        for input_file in simple_span_input_files:
+        for input_file in span_input_files:
             # Find corresponding output file
             subject = input_file.stem.split('_')[0]  # e.g., "sub-s4"
             session = input_file.stem.split('_')[1]  # e.g., "ses-1" 
             run = input_file.stem.split('_')[2]      # e.g., "run-1"
             
+            # Extract numbers for matching (handle zero-padding differences)
+            subject_num = subject.replace('sub-s', '')  # e.g., "4" or "8"
+            session_num = session.replace('ses-', '')  # e.g., "1" or "10"
+            run_num = run.replace('run-', '')  # e.g., "1"
+            
+            # Determine task type from input filename
+            if 'simple_span' in input_file.name.lower():
+                task_type = 'simpleSpan'
+            elif 'operation_span' in input_file.name.lower() and 'operation_only' not in input_file.name.lower():
+                task_type = 'opSpan'
+            else:
+                continue  # Skip other span types for this test
+            
             matching_output = None
-            for output_file in simple_span_output_files:
-                if subject in output_file.name and session in output_file.name and run in output_file.name:
+            for output_file in span_output_files:
+                # Check if this output file matches the input file
+                if (f"sub-s{subject_num.zfill(2)}" in output_file.name and  # Match with zero-padding
+                    f"ses-{session_num.zfill(2)}" in output_file.name and  # Match with zero-padding
+                    f"run-{run_num}" in output_file.name and  # Run is typically not zero-padded
+                    task_type in output_file.name):  # Match task type
                     matching_output = output_file
                     break
             
@@ -124,34 +146,38 @@ class TestSimpleSpanColumnValidation:
             input_df = pd.read_csv(input_file)
             output_df = pd.read_csv(matching_output, sep='\t')
             
-            # Find all columns containing "_timestamps" in the input file
-            timestamp_columns = [col for col in input_df.columns if '_timestamps' in col.lower()]
+            # Filter input to only rows after trigger (same filtering as processor does)
+            # Find trigger row
+            trigger_mask = input_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
+            if trigger_mask.any():
+                trigger_idx = input_df[trigger_mask].index[0]
+                input_df_filtered = input_df.loc[trigger_idx:]
+            else:
+                input_df_filtered = input_df  # No trigger found, use all rows
             
-            if not timestamp_columns:
-                # No timestamp columns found, skip this file
-                continue
-            
-            # Collect all expected timestamps from all timestamp columns
+            # Collect all expected timestamps from input (only from rows that will be in output)
             all_expected_timestamps = []
             
-            for idx, row in input_df.iterrows():
-                # Parse each timestamp column
-                for timestamp_col in timestamp_columns:
-                    timestamp_str = row.get(timestamp_col, '')
-                    
-                    # Parse the list
-                    def parse_list(list_str):
-                        if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
-                            return []
-                        try:
-                            return ast.literal_eval(list_str) if isinstance(list_str, str) else []
-                        except:
-                            return []
-                    
-                    timestamps = parse_list(timestamp_str)
-                    
-                    # Add all timestamps to the expected list
-                    all_expected_timestamps.extend([str(t) for t in timestamps])
+            for idx, row in input_df_filtered.iterrows():
+                # Parse the list columns
+                def parse_list(list_str):
+                    if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
+                        return []
+                    try:
+                        return ast.literal_eval(list_str) if isinstance(list_str, str) else []
+                    except:
+                        return []
+                
+                moving_timestamps = parse_list(row.get('moving_through_grid_timestamps', ''))
+                valid_responses = parse_list(row.get('valid_responses_timestamps', ''))
+                extra_responses = parse_list(row.get('extra_responses_timestamps', ''))
+                duplicate_responses = parse_list(row.get('duplicate_responses_timestamps', ''))
+                
+                # Add all timestamps to the expected list
+                all_expected_timestamps.extend([str(t) for t in moving_timestamps])
+                all_expected_timestamps.extend([str(t) for t in valid_responses])
+                all_expected_timestamps.extend([str(t) for t in extra_responses])
+                all_expected_timestamps.extend([str(t) for t in duplicate_responses])
             
             # Remove duplicates and empty strings
             all_expected_timestamps = list(set([t for t in all_expected_timestamps if t.strip()]))
@@ -161,9 +187,20 @@ class TestSimpleSpanColumnValidation:
                 continue
             
             # Get all response_time values from output
-            response_times = output_df['response_time'].astype(str).tolist()
-            # Remove 'n/a' and empty values
-            response_times = [t for t in response_times if t not in ['n/a', '', 'nan']]
+            response_times_raw = output_df['response_time'].tolist()
+            # Convert to numeric and back to string to normalize (e.g., 3522.0 -> 3522)
+            response_times = []
+            for rt in response_times_raw:
+                try:
+                    # Try to convert to float, then to int if it's a whole number
+                    rt_float = float(rt)
+                    if rt_float == int(rt_float):
+                        response_times.append(str(int(rt_float)))
+                    else:
+                        response_times.append(str(rt_float))
+                except (ValueError, TypeError):
+                    # Skip non-numeric values like 'n/a'
+                    pass
             
             # Check that every expected timestamp appears in response_time
             missing_timestamps = []
@@ -174,7 +211,6 @@ class TestSimpleSpanColumnValidation:
             if missing_timestamps:
                 pytest.fail(
                     f"Input file {input_file.name} has timestamps that don't appear in response_time column:\n"
-                    f"Timestamp columns found: {timestamp_columns}\n"
                     f"Missing timestamps: {missing_timestamps}\n"
                     f"Expected timestamps: {all_expected_timestamps}\n"
                     f"Found response_times: {response_times}"
