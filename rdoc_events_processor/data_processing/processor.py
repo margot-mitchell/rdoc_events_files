@@ -616,18 +616,31 @@ class EventFileProcessor:
                     response_time_numeric = pd.to_numeric(response_time_col, errors='coerce') / 1000.0
                     
                     # Identify which rows are part of a test_trial sequence
-                    # A row is in a sequence if row[i] = test_trial AND row[i-1] = test_trial AND row[i+1] = test_trial
+                    # A row is in a sequence if it's part of a cluster of 2+ consecutive test_trial rows
                     is_test_trial = (trial_id_col == 'test_trial')
                     in_sequence = pd.Series([False] * len(event_df), index=event_df.index)
                     
-                    for i in range(len(event_df)):
+                    # Find all consecutive test_trial sequences
+                    i = 0
+                    while i < len(event_df):
                         if is_test_trial.iloc[i]:
-                            # Check if previous and next rows are also test_trial
-                            prev_is_test = (i > 0) and is_test_trial.iloc[i - 1]
-                            next_is_test = (i < len(event_df) - 1) and is_test_trial.iloc[i + 1]
+                            # Found start of a test_trial sequence
+                            seq_start = i
+                            seq_end = i
                             
-                            if prev_is_test and next_is_test:
-                                in_sequence.iloc[i] = True
+                            # Find the end of consecutive test_trial rows
+                            while seq_end < len(event_df) - 1 and is_test_trial.iloc[seq_end + 1]:
+                                seq_end += 1
+                            
+                            # Mark all rows in this sequence as in_sequence (if sequence has 2+ rows)
+                            if seq_end > seq_start:
+                                for j in range(seq_start, seq_end + 1):
+                                    in_sequence.iloc[j] = True
+                            
+                            # Move past this sequence
+                            i = seq_end + 1
+                        else:
+                            i += 1
                     
                     # Now find the sequences and process them
                     sequences_found = []
