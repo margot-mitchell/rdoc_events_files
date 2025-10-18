@@ -8,15 +8,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def load_bids_data(file_path):
+def load_csv_as_dataframe(file_path):
     """
-    Load BIDS format CSV data.
+    Load CSV file as pandas DataFrame.
     
     Args:
-        file_path (str): Path to the BIDS CSV file
+        file_path (str): Path to the CSV file
         
     Returns:
-        pd.DataFrame: Loaded data
+        pd.DataFrame: Loaded data, or None if loading fails
     """
     try:
         data = pd.read_csv(file_path)

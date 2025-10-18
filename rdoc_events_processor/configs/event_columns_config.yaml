@@ -5,11 +5,15 @@
 # Format: "bids_column_name": "event_file_column_name"
 # Leave event_file_column_name empty to keep the same name as bids_column_name
 bids_columns:
-  "time_elapsed": "onset"
-  "stimulus_duration": "duration"
+  # DIRECT MAPPING FOR ALL TASKS: No manipulation beyond initial mapping
   "trial_id": "trial_id"
-  "rt": "response_time"
-  "correct_trial": "acc"
+  # PROCESSED FOR ALL TASKS: 
+  "time_elapsed": "onset"   # Converts milliseconds to seconds, normalizes to trigger_start, and recalculates for span_recall sequences
+  # PROCESSED FOR SOME TASKS: 
+  "stimulus_duration": "duration"   # May be replaced with trial_duration (for test_trial rows) or block_duration (for fmri_wait_block_initial_end)
+  "rt": "response_time"   # Used in span task sequence onset recalculations (both opSpan and simpleSpan convert from ms to seconds before recalculation)
+  "correct_trial": "acc"   # Recalculated for opSpan, simpleSpan, and opOnlySpan tasks based on task-specific logic
+
 
 # Task-specific columns (only applied to their respective tasks)
 task_specific_columns:
@@ -52,7 +56,7 @@ task_specific_columns:
 
   # Go Nogo
   goNogo:
-    # Note: go_nogo_condition will have to be calculated and appended to rdoc columns
+    # Note: go_nogo_condition are calculated and appended to rdoc columns
     "correct_response": "correct_response"
     "response": "key_press"
     "condition": "trial_type"
@@ -101,16 +105,10 @@ task_specific_columns:
     "grid_symmetry": "grid_symmetry"
     "spatial_location": "spatial_location"
     "condition": "trial_type" # manipulated to set "span" for span trials (dropbox has "operation" for ALL rows)
-    "moving_through_grid_timestamps": "moving_through_grid_timestamps"  # needed for processing but dropped from output
-    "cell_order_through_grid": "cell_order_through_grid"  # needed for processing but dropped from output
-    "valid_responses_timestamps": "valid_responses_timestamps"  # needed for processing but dropped from output
-    "duplicate_responses_timestamps": "duplicate_responses_timestamps"  # needed for processing but dropped from output
-    "extra_responses_timestamps": "extra_responses_timestamps"  # needed for processing but dropped from output
-    "correct_navigation_response": "correct_navigation_response"  # needed for processing but dropped from output
-    "valid_responses": "valid_responses"  # needed for processing but dropped from output
-    "duplicate_responses": "duplicate_responses"  # needed for processing but dropped from output
-    "extra_responses": "extra_responses"  # needed for processing but dropped from output
-    "correct_cell_order": "correct_cell_order"  # needed for processing but dropped from output
+    # Note: moving_through_grid_timestamps, cell_order_through_grid, valid_responses, duplicate_responses, 
+    # extra_responses, valid_responses_timestamps, duplicate_responses_timestamps, extra_responses_timestamps, 
+    # correct_cell_order, and correct_navigation_response are used for processing but may not exist in input files
+    # and are handled gracefully during processing with .get() methods.
     # Note: valid_cell_selection, invalid_cell_selection, correct_cell, and cell_movement are created by span processing
 
   "opOnlySpan":
@@ -123,18 +121,11 @@ task_specific_columns:
     "spatial_location": "spatial_location"
     "condition": "trial_type"
     "response": "response"
-    # Add the required input columns for processing
-    "moving_through_grid_timestamps": "moving_through_grid_timestamps"  # needed for processing but dropped from output
-    "cell_order_through_grid": "cell_order_through_grid"  # needed for processing but dropped from output
-    "valid_responses": "valid_responses"  # needed for processing but dropped from output
-    "valid_responses_timestamps": "valid_responses_timestamps"  # needed for processing but dropped from output
-    "duplicate_responses": "duplicate_responses"  # needed for processing but dropped from output
-    "duplicate_responses_timestamps": "duplicate_responses_timestamps"  # needed for processing but dropped from output
-    "extra_responses": "extra_responses"  # needed for processing but dropped from output
-    "extra_responses_timestamps": "extra_responses_timestamps"  # needed for processing but dropped from output
-    "correct_cell_order": "correct_cell_order"  # needed for processing but dropped from output
-    # Note: valid_cell_selection, invalid_cell_selection, correct_cell, and cell_movement
-    # are created by the process_simplespan_data function from the input list columns
+    # Note: moving_through_grid_timestamps, cell_order_through_grid, valid_responses, duplicate_responses, 
+    # extra_responses, valid_responses_timestamps, duplicate_responses_timestamps, extra_responses_timestamps, 
+    # and correct_cell_order are used for processing but may not exist in input files
+    # and are handled gracefully during processing with .get() methods.
+    # Note: valid_cell_selection, invalid_cell_selection, correct_cell, and cell_movement are created by span processing
 
 # Columns to exclude from specific tasks
 exclude_columns_by_task:
@@ -159,6 +150,7 @@ exclude_columns_by_task:
     - "extra_responses"
     - "extra_responses_timestamps"
     - "correct_cell_order"
+    - "correct_navigation_response"
 
 
 

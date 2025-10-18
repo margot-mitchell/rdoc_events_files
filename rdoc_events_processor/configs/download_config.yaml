@@ -4,7 +4,7 @@
 # Remote configuration
 remote:
   name: "dropbox"  # Name of the rclone remote
-  path: "RDOC_fMRI_Events"  # Path in Dropbox
+  path: "rdoc_fmri_behavior/output/bids"  # Path in Dropbox
 
 # Local configuration  
 local:

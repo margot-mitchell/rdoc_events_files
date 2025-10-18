@@ -72,4 +72,25 @@ def main():
                 logger.info(f"Processing subject: {subject_id}")
                 processor.process_subject_sessions(args.input_dir, args.output_dir, subject_id)
     
+    # Print final statistics
+    stats = processor.get_statistics()
+    print("\n" + "="*60)
+    print("PROCESSING SUMMARY")
+    print("="*60)
+    print(f"Input files found:           {stats['input_files_found']:>6}")
+    print(f"Event files created:         {stats['files_created']:>6}")
+    print(f"Files skipped (filtered):    {stats['files_skipped_filtered']:>6}")
+    print(f"Files skipped (data issues): {stats['files_skipped_data_issues']:>6}")
+    print("="*60)
+    print(f"Filtered: prescan, practice, pretouch files")
+    print(f"Data issues: missing required columns, fmri_wait_block_initial marker, or CSV loading errors")
+    
+    # Show detailed information about skipped files if any
+    if stats.get('skipped_files_details'):
+        print(f"\nFILES SKIPPED DUE TO DATA ISSUES ({len(stats['skipped_files_details'])} files):")
+        for filename, reason in stats['skipped_files_details']:
+            print(f"  • {filename}: {reason}")
+    
+    print("="*60)
+    
     logger.info("Event file creation completed!")

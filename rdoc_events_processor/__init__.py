@@ -11,11 +11,11 @@ __email__ = "margot.mitchell@example.com"
 
 from .data_processing import EventFileProcessor
 from .utils.config import load_config, load_default_config
-from .utils.data_loader import load_bids_data
+from .utils.data_loader import load_csv_as_dataframe
 
 __all__ = [
     "EventFileProcessor",
     "load_config", 
     "load_default_config",
-    "load_bids_data",
+    "load_csv_as_dataframe",
 ]

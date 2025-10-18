@@ -12,83 +12,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def expand_list_column(df, column_name):
-    """
-    Expand a column containing list data into multiple rows.
-    
-    Each item in the list becomes a separate row with all other values duplicated.
-    
-    Args:
-        df (pd.DataFrame): Input dataframe
-        column_name (str): Name of the column containing list data
-        
-    Returns:
-        pd.DataFrame: Expanded dataframe with list items as separate rows
-        
-    Example:
-        Input:
-            onset  duration  cell_order_through_grid
-        0   1.0     2.5      [1, 5, 9]
-        1   2.0     2.5      [2, 6]
-        
-        Output:
-            onset  duration  cell_order_through_grid
-        0   1.0     2.5      1
-        1   1.0     2.5      5
-        2   1.0     2.5      9
-        3   2.0     2.5      2
-        4   2.0     2.5      6
-    """
-    if column_name not in df.columns:
-        logger.warning(f"Column '{column_name}' not found in dataframe")
-        return df.copy()
-    
-    expanded_rows = []
-    
-    for idx, row in df.iterrows():
-        list_value = row[column_name]
-        
-        # Handle different types of list data
-        if pd.isna(list_value):
-            # Skip rows with NaN values
-            continue
-        elif isinstance(list_value, str):
-            # Parse string representation of list
-            try:
-                # Handle both '[1, 2, 3]' and '1, 2, 3' formats
-                if list_value.strip().startswith('[') and list_value.strip().endswith(']'):
-                    parsed_list = ast.literal_eval(list_value)
-                else:
-                    # Handle comma-separated values
-                    parsed_list = [item.strip() for item in list_value.split(',')]
-            except (ValueError, SyntaxError):
-                logger.warning(f"Could not parse list value: {list_value}")
-                # Treat as single item
-                parsed_list = [list_value]
-        elif isinstance(list_value, list):
-            # Already a list
-            parsed_list = list_value
-        else:
-            # Single value, treat as list with one item
-            parsed_list = [list_value]
-        
-        # Skip empty lists
-        if not parsed_list:
-            continue
-            
-        # Create a row for each item in the list
-        for item in parsed_list:
-            new_row = row.copy()
-            new_row[column_name] = str(item)  # Convert to string for consistency
-            expanded_rows.append(new_row)
-    
-    if not expanded_rows:
-        # Return empty dataframe with same columns if no valid data
-        return pd.DataFrame(columns=df.columns)
-    
-    return pd.DataFrame(expanded_rows).reset_index(drop=True)
-
-
 def parse_list_string(list_str):
     """Parse a string representation of a list into actual list."""
     if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
@@ -108,6 +31,47 @@ def parse_list_string(list_str):
     except (ValueError, SyntaxError):
         logger.warning(f"Could not parse list string: {list_str}")
         return []
+
+
+def _clear_list_columns_and_set_defaults(new_row, first_row_added):
+    """
+    Clear list columns and set default values for span processing.
+    
+    Args:
+        new_row (dict): Row dictionary to modify
+        first_row_added (bool): Whether first row has been added for this input row
+        
+    Returns:
+        bool: Whether this should be considered the first row added
+    """
+    # Clear list columns
+    list_columns = [
+        'moving_through_grid_timestamps', 'cell_order_through_grid',
+        'valid_responses_timestamps', 'duplicate_responses_timestamps', 
+        'extra_responses_timestamps', 'valid_responses', 'duplicate_responses',
+        'extra_responses', 'correct_cell_order'
+    ]
+    
+    for col in list_columns:
+        new_row[col] = ''
+    
+    # Set response to n/a for all rows except the very first expanded row
+    if first_row_added:
+        new_row['response'] = 'n/a'
+    
+    return True
+
+
+def _set_non_relevant_columns_to_na(new_row, column_mapping):
+    """
+    Set specified columns to 'n/a' for non-relevant row types.
+    
+    Args:
+        new_row (dict): Row dictionary to modify
+        column_mapping (dict): Dict mapping column names to values to set
+    """
+    for col, value in column_mapping.items():
+        new_row[col] = value
 
 
 def process_opspan_data(df):
@@ -442,58 +406,28 @@ def process_opspan_data(df):
     else:
         logger.warning("cell_movement column not found in processed data")
     
-    # Sort sequential clusters of test_trial rows by response_time (same logic as simpleSpan)
+    # Sort sequential clusters of test_trial rows by response_time
+    result_df = _sort_test_trial_clusters_by_response_time(result_df)
+    
+    # Count clusters for logging
     trial_id_series = result_df.get('trial_id', pd.Series())
     response_time_series = result_df.get('response_time', pd.Series())
-    
-    # Find clusters of consecutive test_trial rows with non-n/a response_time
     is_test_trial = (trial_id_series == 'test_trial')
     has_valid_response_time = (~response_time_series.astype(str).isin(['n/a', '', 'nan']))
     is_cluster_member = is_test_trial & has_valid_response_time
     
     if is_cluster_member.any():
-        # Create a copy to work with
-        sorted_df = result_df.copy()
-        
-        # Find cluster boundaries
-        cluster_starts = []
-        cluster_ends = []
+        # Count clusters for logging (simplified logic)
+        cluster_count = 0
         in_cluster = False
-        
         for i in range(len(is_cluster_member)):
             if is_cluster_member.iloc[i] and not in_cluster:
-                # Start of a new cluster
-                cluster_starts.append(i)
+                cluster_count += 1
                 in_cluster = True
-            elif not is_cluster_member.iloc[i] and in_cluster:
-                # End of current cluster
-                cluster_ends.append(i - 1)
+            elif not is_cluster_member.iloc[i]:
                 in_cluster = False
         
-        # Handle case where cluster extends to end of dataframe
-        if in_cluster:
-            cluster_ends.append(len(is_cluster_member) - 1)
-        
-        # Sort each cluster by response_time
-        for start, end in zip(cluster_starts, cluster_ends):
-            if start <= end:
-                # Extract cluster
-                cluster_data = sorted_df.iloc[start:end+1].copy()
-                
-                # Convert response_time to numeric for sorting
-                cluster_data['response_time_numeric'] = pd.to_numeric(
-                    cluster_data['response_time'], errors='coerce'
-                )
-                
-                # Sort by response_time
-                cluster_sorted = cluster_data.sort_values('response_time_numeric')
-                cluster_sorted = cluster_sorted.drop('response_time_numeric', axis=1)
-                
-                # Replace the cluster in the dataframe
-                sorted_df.iloc[start:end+1] = cluster_sorted.values
-        
-        result_df = sorted_df
-        logger.info(f"opSpan: sorted {len(cluster_starts)} clusters of test_trial rows by response_time")
+        logger.info(f"opSpan: sorted {cluster_count} clusters of test_trial rows by response_time")
     
     # Set trial_type based on trial_id for opSpan
     if 'trial_id' in result_df.columns and 'trial_type' in result_df.columns:
@@ -797,56 +731,7 @@ def process_simplespan_data(df):
     result_df = pd.DataFrame(expanded_rows).reset_index(drop=True)
     
     # Sort sequential clusters of test_trial rows by response_time
-    trial_id_series = result_df.get('trial_id', pd.Series())
-    response_time_series = result_df.get('response_time', pd.Series())
-    
-    # Find clusters of consecutive test_trial rows with non-n/a response_time
-    is_test_trial = (trial_id_series == 'test_trial')
-    has_valid_response_time = (~response_time_series.astype(str).isin(['n/a', '', 'nan']))
-    is_cluster_member = is_test_trial & has_valid_response_time
-    
-    if is_cluster_member.any():
-        # Create a copy to work with
-        sorted_df = result_df.copy()
-        
-        # Find cluster boundaries
-        cluster_starts = []
-        cluster_ends = []
-        in_cluster = False
-        
-        for i in range(len(is_cluster_member)):
-            if is_cluster_member.iloc[i] and not in_cluster:
-                # Start of a new cluster
-                cluster_starts.append(i)
-                in_cluster = True
-            elif not is_cluster_member.iloc[i] and in_cluster:
-                # End of current cluster
-                cluster_ends.append(i - 1)
-                in_cluster = False
-        
-        # Handle case where cluster extends to end of dataframe
-        if in_cluster:
-            cluster_ends.append(len(is_cluster_member) - 1)
-        
-        # Sort each cluster by response_time
-        for start, end in zip(cluster_starts, cluster_ends):
-            if start <= end:
-                # Extract cluster
-                cluster_data = sorted_df.iloc[start:end+1].copy()
-                
-                # Convert response_time to numeric for sorting
-                cluster_data['response_time_numeric'] = pd.to_numeric(
-                    cluster_data['response_time'], errors='coerce'
-                )
-                
-                # Sort by response_time
-                cluster_sorted = cluster_data.sort_values('response_time_numeric')
-                cluster_sorted = cluster_sorted.drop('response_time_numeric', axis=1)
-                
-                # Replace the cluster in the dataframe
-                sorted_df.iloc[start:end+1] = cluster_sorted.values
-        
-        result_df = sorted_df
+    result_df = _sort_test_trial_clusters_by_response_time(result_df)
     
     # Set trial_type based on trial_id for simpleSpan
     if 'trial_id' in result_df.columns and 'trial_type' in result_df.columns:
@@ -862,18 +747,84 @@ def process_simplespan_data(df):
     return result_df
 
 
-def process_span_data_for_events(df, task_name):
+def _sort_test_trial_clusters_by_response_time(result_df):
     """
-    Process span task data for event file creation.
-    
-    This function applies span-specific transformations including expanding list columns.
+    Sort clusters of consecutive test_trial rows by response_time.
     
     Args:
-        df (pd.DataFrame): Input dataframe
+        result_df (pd.DataFrame): Dataframe with trial_id and response_time columns
+        
+    Returns:
+        pd.DataFrame: Dataframe with test_trial clusters sorted by response_time
+    """
+    trial_id_series = result_df.get('trial_id', pd.Series())
+    response_time_series = result_df.get('response_time', pd.Series())
+    
+    # Find clusters of consecutive test_trial rows with non-n/a response_time
+    is_test_trial = (trial_id_series == 'test_trial')
+    has_valid_response_time = (~response_time_series.astype(str).isin(['n/a', '', 'nan']))
+    is_cluster_member = is_test_trial & has_valid_response_time
+    
+    if not is_cluster_member.any():
+        return result_df
+    
+    # Create a copy to work with
+    sorted_df = result_df.copy()
+    
+    # Find cluster boundaries
+    cluster_starts = []
+    cluster_ends = []
+    in_cluster = False
+    
+    for i in range(len(is_cluster_member)):
+        if is_cluster_member.iloc[i] and not in_cluster:
+            # Start of a new cluster
+            cluster_starts.append(i)
+            in_cluster = True
+        elif not is_cluster_member.iloc[i] and in_cluster:
+            # End of current cluster
+            cluster_ends.append(i - 1)
+            in_cluster = False
+    
+    # Handle case where cluster extends to end of dataframe
+    if in_cluster:
+        cluster_ends.append(len(is_cluster_member) - 1)
+    
+    # Sort each cluster by response_time
+    for start, end in zip(cluster_starts, cluster_ends):
+        if start <= end:
+            # Extract cluster
+            cluster_data = sorted_df.iloc[start:end+1].copy()
+            
+            # Convert response_time to numeric for sorting
+            cluster_data['response_time_numeric'] = pd.to_numeric(
+                cluster_data['response_time'], errors='coerce'
+            )
+            
+            # Sort by response_time
+            cluster_sorted = cluster_data.sort_values('response_time_numeric')
+            cluster_sorted = cluster_sorted.drop('response_time_numeric', axis=1)
+            
+            # Replace the cluster in the dataframe
+            sorted_df.iloc[start:end+1] = cluster_sorted.values
+    
+    return sorted_df
+
+
+def unfurl_and_align_span_recall_events(df, task_name):
+    """
+    Unfurl and align span recall events by expanding list columns into individual rows.
+    
+    This function unfolds list data (e.g., timestamps, responses) from compressed string
+    format into individual event rows, while maintaining index-based alignment between
+    related lists (e.g., timestamp[i] aligns with response[i]).
+    
+    Args:
+        df (pd.DataFrame): Input dataframe with list columns stored as strings
         task_name (str): Name of the task ('opSpan' or 'simpleSpan')
         
     Returns:
-        pd.DataFrame: Processed dataframe ready for event file creation
+        pd.DataFrame: Expanded dataframe with individual event rows and aligned data
     """
     if task_name == 'opSpan':
         return process_opspan_data(df)

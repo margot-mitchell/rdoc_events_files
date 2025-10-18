@@ -8,16 +8,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def reorder_columns(df, target_order=None):
+def reorder_columns_to_standard_bids_event_format(df, target_order=None):
     """
-    Reorder columns in a DataFrame according to the specified order.
+    Reorder columns in a DataFrame to standard BIDS event file format.
     
     Args:
         df (pd.DataFrame): DataFrame to reorder
-        target_order (list): List of column names in desired order
+        target_order (list): List of column names in desired order (defaults to BIDS standard)
         
     Returns:
-        pd.DataFrame: DataFrame with reordered columns
+        pd.DataFrame: DataFrame with reordered columns following BIDS event format
     """
     if target_order is None:
         # Default target order: onset, duration, trial_id, trial_type, key_press, response_time, acc

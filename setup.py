@@ -60,6 +60,7 @@ setup(
         "console_scripts": [
             "rdoc-events=rdoc_events_processor.cli.main:main",
             "rdoc-events-processor=rdoc_events_processor.cli.main:main",
+            "rdoc-download=rdoc_events_processor.cli.download:main",
         ],
     },
     include_package_data=True,
