@@ -10,7 +10,11 @@ from rdoc_events_processor.data_processing.calculators import (
     calculate_go_accuracy,
     calculate_trial_type_stopSignal,
     calculate_go_nogo_condition,
-    extract_cue_letter
+    extract_cue_letter_from_image_filename,
+    calculate_stop_signal_condition,
+    calculate_opspan_trial_type,
+    calculate_oponlyspan_accuracy_and_trial_type,
+    apply_cuedts_condition_mappings
 )
 
 
@@ -103,18 +107,18 @@ class TestCueLetterExtraction:
     def test_extract_cue_letter_uppercase(self):
         """Test extraction of uppercase letters."""
         stimulus = '<div class = bigbox><div class = centerbox><div class = gng_number><div class = cue-text><img src="uppercase_G.png"></div></div></div></div>'
-        assert extract_cue_letter(stimulus) == 'G'
+        assert extract_cue_letter_from_image_filename(stimulus) == 'G'
     
     def test_extract_cue_letter_lowercase(self):
         """Test extraction of lowercase letters."""
         stimulus = '<div class = bigbox><div class = centerbox><div class = gng_number><div class = cue-text><img src="lowercase_g.png"></div></div></div></div>'
-        assert extract_cue_letter(stimulus) == 'g'
+        assert extract_cue_letter_from_image_filename(stimulus) == 'g'
     
     def test_extract_cue_letter_invalid(self):
         """Test extraction with invalid stimulus."""
-        assert extract_cue_letter('invalid_stimulus') == ''
-        assert extract_cue_letter(None) == ''
-        assert extract_cue_letter('') == ''
+        assert extract_cue_letter_from_image_filename('invalid_stimulus') == ''
+        assert extract_cue_letter_from_image_filename(None) == ''
+        assert extract_cue_letter_from_image_filename('') == ''
 
 
 class TestOpOnlySpanAccuracy:
@@ -362,3 +366,183 @@ class TestNBackLetterToMatch:
             error_msg += "- 1st most proximal valid letter above when delay=1.0\n"
             error_msg += "- 2nd most proximal valid letter above when delay=2.0"
             pytest.fail(error_msg)
+
+
+class TestStopSignalConditionCalculation:
+    """Test stop_signal_condition calculation."""
+    
+    def test_calculate_stop_signal_condition_stop_trials(self):
+        """Test stop_signal_condition for stop trials."""
+        assert calculate_stop_signal_condition('stop_success') == 'stop'
+        assert calculate_stop_signal_condition('stop_failure') == 'stop'
+    
+    def test_calculate_stop_signal_condition_go_trials(self):
+        """Test stop_signal_condition for go trials."""
+        assert calculate_stop_signal_condition('go_success') == 'go'
+        assert calculate_stop_signal_condition('go_failure') == 'go'
+    
+    def test_calculate_stop_signal_condition_na_values(self):
+        """Test stop_signal_condition for n/a values."""
+        assert calculate_stop_signal_condition('n/a') == 'n/a'
+        assert calculate_stop_signal_condition('') == 'n/a'
+        assert calculate_stop_signal_condition(None) == 'n/a'
+        assert calculate_stop_signal_condition(pd.NA) == 'n/a'
+    
+    def test_calculate_stop_signal_condition_invalid_values(self):
+        """Test stop_signal_condition for invalid trial types."""
+        assert calculate_stop_signal_condition('invalid_trial') == 'n/a'
+
+
+class TestOpSpanTrialTypeCalculation:
+    """Test opSpan trial_type calculation."""
+    
+    def test_calculate_opspan_trial_type_all_types(self):
+        """Test opSpan trial_type calculation for all trial_id types."""
+        trial_ids = pd.Series(['test_stim', 'test_trial', 'test_inter-stimulus', 'test_ITI'])
+        expected_trial_types = ['span_encoding', 'span_recall', 'operation', 'n/a']
+        
+        trial_type_result, counts = calculate_opspan_trial_type(trial_ids)
+        
+        assert list(trial_type_result) == expected_trial_types
+        assert counts == {'encoding': 1, 'recall': 1, 'operation': 1, 'iti': 1}
+    
+    def test_calculate_opspan_trial_type_mixed_series(self):
+        """Test opSpan trial_type calculation with mixed trial_id values."""
+        trial_ids = pd.Series(['test_stim', 'unknown_type', 'test_trial', 'test_ITI'])
+        trial_type_result, counts = calculate_opspan_trial_type(trial_ids)
+        
+        expected = ['span_encoding', 'unknown_type', 'span_recall', 'n/a']
+        assert list(trial_type_result) == expected
+        assert counts == {'encoding': 1, 'recall': 1, 'operation': 0, 'iti': 1}
+    
+    def test_calculate_opspan_trial_type_empty_series(self):
+        """Test opSpan trial_type calculation with empty series."""
+        trial_ids = pd.Series([])
+        trial_type_result, counts = calculate_opspan_trial_type(trial_ids)
+        
+        assert len(trial_type_result) == 0
+        assert counts == {'encoding': 0, 'recall': 0, 'operation': 0, 'iti': 0}
+
+
+class TestOpOnlySpanAccuracyAndTrialType:
+    """Test opOnlySpan accuracy and trial_type calculation."""
+    
+    def test_calculate_oponlyspan_both_responses_present_match(self):
+        """Test accuracy when both correct_response and response are present and match."""
+        # Create test data
+        event_data = {
+            'correct_response': pd.Series(['A', 'B', 'C']),
+            'response': pd.Series(['A', 'B', 'D']),
+            'trial_id': pd.Series(['test_inter-stimulus'] * 3),
+            'trial_type': pd.Series([''] * 3)
+        }
+        original_correct_trial = pd.Series([None, None, None])
+        
+        new_acc, trial_type = calculate_oponlyspan_accuracy_and_trial_type(event_data, original_correct_trial)
+        
+        # First two should be 1.0 (match), third should be 0.0 (no match)
+        assert new_acc.iloc[0] == 1.0
+        assert new_acc.iloc[1] == 1.0
+        assert new_acc.iloc[2] == 0.0
+        assert all(trial_type == 'operation')
+    
+    def test_calculate_oponlyspan_no_response_case(self):
+        """Test accuracy when correct_response is present but response is n/a."""
+        event_data = {
+            'correct_response': pd.Series(['A', 'B']),
+            'response': pd.Series(['n/a', '']),
+            'trial_id': pd.Series(['test_inter-stimulus'] * 2),
+            'trial_type': pd.Series([''] * 2)
+        }
+        original_correct_trial = pd.Series([None, 'n/a'])
+        
+        new_acc, trial_type = calculate_oponlyspan_accuracy_and_trial_type(event_data, original_correct_trial)
+        
+        # Should be 0.0 when correct_response is present but response is n/a/empty
+        assert new_acc.iloc[0] == 0.0
+        assert new_acc.iloc[1] == 0.0
+    
+    def test_calculate_oponlyspan_trial_type_mapping(self):
+        """Test trial_type mapping for opOnlySpan."""
+        event_data = {
+            'correct_response': pd.Series(['A']),
+            'response': pd.Series(['A']),
+            'trial_id': pd.Series(['test_inter-stimulus']),
+            'trial_type': pd.Series(['original_type'])
+        }
+        original_correct_trial = pd.Series([1.0])
+        
+        new_acc, trial_type = calculate_oponlyspan_accuracy_and_trial_type(event_data, original_correct_trial)
+        
+        # Should set trial_type to 'operation' for test_inter-stimulus
+        assert trial_type.iloc[0] == 'operation'
+
+
+class TestCuedTSConditionMappings:
+    """Test cuedTS condition mappings."""
+    
+    def test_apply_cuedts_condition_mappings_basic(self):
+        """Test basic cuedTS condition mapping functionality."""
+        # Create test dataframe
+        event_df = pd.DataFrame({
+            'trial_id': ['test_cue', 'test_trial', 'test_other', 'test_cue'],
+            'correct_response': ['A', 'B', 'C', 'D'],
+            'cue_condition': ['cue1', 'cue2', 'cue3', 'cue4'],
+            'task_condition': ['task1', 'task2', 'task3', 'task4'],
+            'cue': ['cue_a', 'cue_b', 'cue_c', 'cue_d'],
+            'task': ['task_a', 'task_b', 'task_c', 'task_d']
+        })
+        
+        result_df = apply_cuedts_condition_mappings(event_df)
+        
+        # Check test_cue rows have correct_response set to 'n/a'
+        test_cue_mask = result_df['trial_id'] == 'test_cue'
+        assert all(result_df.loc[test_cue_mask, 'correct_response'] == 'n/a')
+        
+        # Check test_trial rows have cue_condition set to 'n/a'
+        test_trial_mask = result_df['trial_id'] == 'test_trial'
+        assert all(result_df.loc[test_trial_mask, 'cue_condition'] == 'n/a')
+        
+        # Check other rows have both conditions set to 'n/a'
+        other_mask = result_df['trial_id'] == 'test_other'
+        assert all(result_df.loc[other_mask, 'cue_condition'] == 'n/a')
+        assert all(result_df.loc[other_mask, 'task_condition'] == 'n/a')
+    
+    def test_apply_cuedts_condition_mappings_cue_task_na_propagation(self):
+        """Test that cue/task columns are set to 'n/a' when their conditions are 'n/a'."""
+        event_df = pd.DataFrame({
+            'trial_id': ['test_cue', 'test_trial'],
+            'cue_condition': ['cue1', 'n/a'],
+            'task_condition': ['n/a', 'task2'],
+            'cue': ['cue_a', 'cue_b'],
+            'task': ['task_a', 'task_b']
+        })
+        
+        result_df = apply_cuedts_condition_mappings(event_df)
+        
+        # For test_cue, task_condition becomes 'n/a' so task should become 'n/a'
+        test_cue_mask = result_df['trial_id'] == 'test_cue'
+        assert all(result_df.loc[test_cue_mask, 'task_condition'] == 'n/a')
+        assert all(result_df.loc[test_cue_mask, 'task'] == 'n/a')
+        
+        # For test_trial, cue_condition becomes 'n/a' so cue should become 'n/a'
+        test_trial_mask = result_df['trial_id'] == 'test_trial'
+        assert all(result_df.loc[test_trial_mask, 'cue_condition'] == 'n/a')
+        assert all(result_df.loc[test_trial_mask, 'cue'] == 'n/a')
+
+
+class TestProcessorErrorHandling:
+    """Test error handling in processor functionality."""
+    
+    def test_missing_required_columns_handling(self):
+        """Test that processor properly handles missing required columns."""
+        # This test would need to be implemented in a separate test file
+        # that tests the actual EventFileProcessor class
+        # For now, this placeholder shows what should be tested
+        pass
+    
+    def test_statistics_tracking_accuracy(self):
+        """Test that statistics tracking accurately counts files processed."""
+        # This test would need access to EventFileProcessor instance
+        # and would verify that get_statistics() returns accurate counts
+        pass

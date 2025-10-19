@@ -112,9 +112,9 @@ class EventFileProcessor:
             
             # Map BIDS columns to event file columns (all required columns validated above)
             for bids_col, event_col in bids_columns.items():
-                # Use custom event column name if specified, otherwise use bids column name
-                col_name = event_col if event_col else bids_col
-                event_data[col_name] = data[bids_col]
+                    # Use custom event column name if specified, otherwise use bids column name
+                    col_name = event_col if event_col else bids_col
+                    event_data[col_name] = data[bids_col]
             
             # Add task-specific columns (all columns in task_specific_columns are truly required)
             for bids_col, event_col in task_specific.items():
@@ -269,12 +269,11 @@ class EventFileProcessor:
                 return False
             
             # Special processing for opSpan task
-            # For sequences of "span_recall" rows, recalculate onsets based on response_time
-            # A row is in a sequence if it's a "span_recall" row and part of consecutive span_recall rows
-            # Note: span_encoding rows are NOT included in sequences
+            # For sequences of test_trial rows (which become span_recall), recalculate onsets based on response_time
+            # Uses same unified logic as simpleSpan: requires 2+ consecutive test_trial rows
             if task_name == 'opSpan':
-                if 'trial_type' in event_df.columns and 'onset' in event_df.columns and 'response_time' in event_df.columns:
-                    trial_type_col = event_df['trial_type']
+                if 'trial_id' in event_df.columns and 'onset' in event_df.columns and 'response_time' in event_df.columns:
+                    trial_id_col = event_df['trial_id']
                     
                     # Ensure onset column is float type to avoid dtype warnings
                     event_df['onset'] = pd.to_numeric(event_df['onset'], errors='coerce').astype('float64')
@@ -283,18 +282,19 @@ class EventFileProcessor:
                     response_time_col = pd.to_numeric(event_df['response_time'], errors='coerce') / 1000.0
                     
                     # Identify which rows are part of a "span" sequence
-                    is_span = (trial_type_col == 'span_recall')
+                    # Use same logic as simpleSpan: look for test_trial rows (which become span_recall)
+                    is_span = (trial_id_col == 'test_trial')
                     
-                    # Find consecutive sequences of span_recall rows
-                    sequences_found = self._find_consecutive_sequences(event_df, is_span, min_sequence_length=1)
+                    # Find consecutive sequences of test_trial rows (unified with simpleSpan logic)
+                    sequences_found = self._find_consecutive_sequences(event_df, is_span, min_sequence_length=2)
                     
-                    # Recalculate onsets for these sequences
+                    # Recalculate onsets for these sequences using opSpan algorithm (preserves first row to avoid duplicates)
                     rows_modified = self._recalculate_onsets_for_sequences(
                         event_df, sequences_found, response_time_col, 'opSpan'
                     )
                     
                     if rows_modified > 0:
-                        logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} span sequences in opSpan task")
+                        logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} test_trial sequences in opSpan task")
                     
                     # Reorder ALL "span" rows by onset (regardless of whether onsets were recalculated)
                     if 'onset' in event_df.columns and 'trial_type' in event_df.columns:
@@ -374,8 +374,8 @@ class EventFileProcessor:
                     # Identify which rows are part of a test_trial sequence
                     is_test_trial = (trial_id_col == 'test_trial')
                     
-                    # Find consecutive sequences using simpleSpan-style logic (2+ consecutive rows)
-                    sequences_found = self._find_consecutive_sequences_simplespan_style(event_df, is_test_trial)
+                    # Find consecutive sequences of test_trial rows (requires 2+ consecutive rows)
+                    sequences_found = self._find_consecutive_sequences(event_df, is_test_trial, min_sequence_length=2)
                     
                     # Recalculate onsets for these sequences
                     rows_modified = self._recalculate_onsets_for_sequences(
@@ -632,85 +632,90 @@ class EventFileProcessor:
     
     def _normalize_onsets_to_trigger_start(self, event_df, output_path):
         """
-        Normalize onset values from milliseconds to seconds and set trigger_start as reference point.
+        Normalize onset timing by converting milliseconds to seconds and setting trigger_start as time zero.
+        
+        This function performs three main operations:
+        1. Converts onset values from milliseconds to seconds
+        2. Filters out events that occurred before the trigger_start marker
+        3. Recalculates onsets relative to the fmri_wait_block_initial reference point
         
         Args:
-            event_df (pd.DataFrame): Event dataframe with onset column
+            event_df (pd.DataFrame): Event dataframe with 'onset' column containing millisecond timestamps
             output_path: Output path for logging purposes
             
         Returns:
             tuple: (success: bool, filtered_event_df: pd.DataFrame or None)
-                If success=False, the file should be skipped
+                - success=False: File should be skipped (missing required markers)
+                - success=True: File processed successfully, returns filtered dataframe
         """
+        # Early returns for missing or invalid onset data
         if 'onset' not in event_df.columns:
             return True, event_df
             
-        # Convert to numeric, handling any non-numeric values
         onset_series = pd.to_numeric(event_df['onset'], errors='coerce')
-
-        # Only process if we have valid numeric onset values
         if onset_series.isna().all():
             return True, event_df
             
-        # Convert from milliseconds to seconds
+        # Convert milliseconds to seconds
         onset_seconds = onset_series / 1000.0
 
-        # FIRST: Find the fmri_wait_block_initial row in the ORIGINAL data (before filtering)
-        # This gives us the reference point for normalization
+        # STEP 1: Validate and locate the reference marker (fmri_wait_block_initial)
         initial_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_initial'
         
         if not initial_row_mask.any():
-            # No fmri_wait_block_initial found - skip this file with a warning
             logger.warning(f"No 'fmri_wait_block_initial' trial_id found in file {output_path.name}. "
                          f"Skipping this file as it likely contains practice/prescan data.")
             return False, None
             
-        # Get the initial row index and time_elapsed value BEFORE filtering
+        # Get the reference time before any filtering occurs
         initial_idx = event_df[initial_row_mask].index[0]
-        initial_onset = onset_seconds.loc[initial_idx]
+        initial_onset_time = onset_seconds.loc[initial_idx]
         
-        # SECOND: Find the trigger row and filter out rows before it
+        # STEP 2: Locate and filter to trigger_start marker
         trigger_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
         
         if not trigger_row_mask.any():
-            # If no trigger found, this is an error since we should have skipped files without triggers
             raise ValueError(f"No 'fmri_wait_block_trigger_start' trial_id found in file {output_path.name}. "
                            f"This file should have been skipped as it likely contains practice/prescan data.")
             
-        # Get the trigger row index
         trigger_idx = event_df[trigger_row_mask].index[0]
         
-        # Remove all rows that occurred before the trigger row
+        # Filter: Keep only events from trigger_start onwards
         event_df = event_df.loc[trigger_idx:].reset_index(drop=True)
         onset_seconds = onset_seconds.loc[trigger_idx:].reset_index(drop=True)
         
-        # THIRD: Create onset values using the reference from original fmri_wait_block_initial
-        # Formula for all rows: onset[i] = (onset[row i-1] - onset[fmri_wait_block_initial]) in seconds
-        # For row 0 (trigger_start), row i-1 is fmri_wait_block_initial itself
-        # Each row's onset is based on the PREVIOUS row's onset value
+        # STEP 3: Recalculate onsets relative to initial reference point
+        # Formula: onset[i] = (time_elapsed[i-1] - initial_onset_time) for all rows
+        # This makes trigger_start = 0.0 and all subsequent events positive
         
-        # Apply formula consistently to all rows
-        shifted_onset = []
+        normalized_onsets = []
         for i in range(len(onset_seconds)):
             if i == 0:
-                # Row before trigger_start is fmri_wait_block_initial
-                # onset[0] = (onset[initial] - onset[initial]) = 0.0
-                prev_time = initial_onset
+                # First row (trigger_start): use the original initial time as reference
+                # Result: onset[0] = (initial_onset_time - initial_onset_time) = 0.0
+                prev_event_time = initial_onset_time
             else:
-                # Use previous row's onset value
-                prev_time = onset_seconds.iloc[i-1]
-            shifted_onset.append(prev_time - initial_onset)
+                # Use the previous row's actual time_elapsed value
+                prev_event_time = onset_seconds.iloc[i-1]
+            
+            # Normalize: subtract the initial reference point
+            normalized_time = prev_event_time - initial_onset_time
+            normalized_onsets.append(normalized_time)
         
-        # Round onset values to 5 decimal places
-        shifted_onset = [round(val, 5) for val in shifted_onset]
-        event_df['onset'] = shifted_onset
+        # Apply precision rounding and update dataframe
+        event_df['onset'] = [round(val, 5) for val in normalized_onsets]
 
-        logger.info(f"Removed {trigger_idx} rows before trigger start. All onsets calculated from previous row's onset minus fmri_wait_block_initial ({initial_onset:.3f}s)")
+        logger.info(f"Onset normalization complete: removed {trigger_idx} pre-trigger rows, "
+                   f"normalized to initial reference ({initial_onset_time:.3f}s), "
+                   f"trigger_start now at 0.0s")
         return True, event_df
     
     def _find_consecutive_sequences(self, event_df, condition_series, min_sequence_length=1):
         """
         Find consecutive sequences of rows that match a condition.
+        
+        Used by both opSpan (min_sequence_length=1) and simpleSpan (min_sequence_length=2)
+        to identify sequences of events for onset recalculation.
         
         Args:
             event_df (pd.DataFrame): Event dataframe
@@ -737,65 +742,6 @@ class EventFileProcessor:
                 # Only consider sequences that meet minimum length requirement
                 if sequence_end - sequence_start + 1 >= min_sequence_length:
                     sequences_found.append((sequence_start, sequence_end))
-                
-                # Move to the next row after this sequence
-                i = sequence_end + 1
-            else:
-                i += 1
-                
-        return sequences_found
-    
-    def _find_consecutive_sequences_simplespan_style(self, event_df, condition_series):
-        """
-        Find consecutive sequences using simpleSpan-style logic (2+ consecutive rows).
-        
-        Args:
-            event_df (pd.DataFrame): Event dataframe
-            condition_series (pd.Series): Boolean series indicating which rows match condition
-            
-        Returns:
-            list: List of (start_index, end_index) tuples for each sequence
-        """
-        in_sequence = pd.Series([False] * len(event_df), index=event_df.index)
-        
-        # First pass: mark sequences that have 2+ consecutive rows
-        i = 0
-        while i < len(condition_series):
-            if condition_series.iloc[i]:
-                # Found start of a potential sequence
-                seq_start = i
-                seq_end = i
-                
-                # Find the end of consecutive matching rows
-                while seq_end < len(condition_series) - 1 and condition_series.iloc[seq_end + 1]:
-                    seq_end += 1
-                
-                # Mark all rows in this sequence as in_sequence (if sequence has 2+ rows)
-                if seq_end > seq_start:
-                    for j in range(seq_start, seq_end + 1):
-                        in_sequence.iloc[j] = True
-                
-                # Move past this sequence
-                i = seq_end + 1
-            else:
-                i += 1
-        
-        # Second pass: collect the sequences
-        sequences_found = []
-        i = 0
-        while i < len(in_sequence):
-            if in_sequence.iloc[i]:
-                # Found the start of a sequence
-                sequence_start = i
-                sequence_end = i
-                
-                # Find the end of this sequence
-                while sequence_end < len(in_sequence) and in_sequence.iloc[sequence_end]:
-                    sequence_end += 1
-                sequence_end -= 1  # Back up to the last row that was in the sequence
-                
-                # Store this sequence
-                sequences_found.append((sequence_start, sequence_end))
                 
                 # Move to the next row after this sequence
                 i = sequence_end + 1
@@ -852,26 +798,26 @@ class EventFileProcessor:
                     
                     elif onset_calculation_type == 'simpleSpan':
                         # simpleSpan logic: response_time is already in seconds
-                        rt_prev = pd.to_numeric(response_time_col.iloc[j - 1], errors='coerce')
-                        
-                        if pd.notna(rt_prev):
-                            if j == seq_start:
-                                # First row in sequence: onset[i] = onset[i-1] + response_time[i-1]
+                        if j == seq_start:
+                            # First row in sequence: Keep its normalized onset unchanged (don't modify)
+                            pass
+                        elif j == seq_start + 1:
+                            # Second row in sequence: onset[i] = onset[i-1] + response_time[i-1] (same as opSpan)
+                            rt_prev = pd.to_numeric(response_time_col.iloc[j - 1], errors='coerce')
+                            if pd.notna(rt_prev):
+                                # response_time is already in seconds
                                 new_onset = prev_onset_updated + rt_prev
-                            else:
-                                # Other rows: onset[i] = onset[i-1] + (response_time[i-1] - response_time[i-2])
-                                if j > 1:  # Make sure we can access i-2
-                                    rt_prev_prev = pd.to_numeric(response_time_col.iloc[j - 2], errors='coerce')
-                                    if pd.notna(rt_prev_prev):
-                                        new_onset = prev_onset_updated + (rt_prev - rt_prev_prev)
-                                    else:
-                                        # If rt[i-2] is missing, fall back to simple addition
-                                        new_onset = prev_onset_updated + rt_prev
-                                else:
-                                    # Edge case: can't access i-2, use simple addition
-                                    new_onset = prev_onset_updated + rt_prev
+                                event_df.loc[j, 'onset'] = round(new_onset, 5)
+                                rows_modified += 1
+                        else:
+                            # Subsequent rows: onset[i] = onset[i-1] + (response_time[i] - response_time[i-1]) (same as opSpan)
+                            rt_current = pd.to_numeric(response_time_col.iloc[j], errors='coerce')
+                            rt_prev = pd.to_numeric(response_time_col.iloc[j - 1], errors='coerce')
                             
-                            event_df.loc[j, 'onset'] = round(new_onset, 5)
-                            rows_modified += 1
+                            if pd.notna(rt_current) and pd.notna(rt_prev):
+                                # response_time values are already in seconds
+                                new_onset = prev_onset_updated + (rt_current - rt_prev)
+                                event_df.loc[j, 'onset'] = round(new_onset, 5)
+                                rows_modified += 1
         
         return rows_modified

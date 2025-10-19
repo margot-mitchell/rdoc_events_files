@@ -512,7 +512,7 @@ import pytest
         
         This tests the complete flow from raw data to processed event data.
         """
-        from rdoc_events_processor.data_processing.span_manipulators import process_span_data_for_events
+        from rdoc_events_processor.data_processing.span_manipulators import unfurl_and_align_span_recall_events
         
         # Test data with cell_order_through_grid list column
         input_data = pd.DataFrame({
@@ -524,7 +524,7 @@ import pytest
         })
         
         # Process for opSpan
-        result = process_span_data_for_events(input_data, 'opSpan')
+        result = unfurl_and_align_span_recall_events(input_data, 'opSpan')
         
         # Should have expanded rows (3 + 2 = 5 rows)
         assert len(result) == 5
