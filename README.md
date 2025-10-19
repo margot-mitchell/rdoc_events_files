@@ -6,6 +6,42 @@ A Python package for downloading and processing behavioral data in csv format an
 
 The package is organized into several modules, each handling specific aspects of the data processing pipeline:
 
+### Directory Structure
+
+```
+rdoc_fmri_events/
+├── rdoc_events_processor/          # Main package
+│   ├── __init__.py                 # Package initialization & API exports
+│   ├── cli/                        # Command-line interfaces
+│   │   ├── __init__.py
+│   │   ├── main.py                 # Main event processing CLI
+│   │   └── download.py             # Dropbox download CLI
+│   ├── configs/                    # Configuration files
+│   │   ├── event_columns_config.yaml    # Column mappings & output settings
+│   │   └── download_config.yaml         # Download & rclone settings
+│   ├── data_processing/            # Core processing logic
+│   │   ├── __init__.py
+│   │   ├── processor.py            # Main EventFileProcessor class
+│   │   ├── calculators.py          # Task-specific calculation functions
+│   │   └── span_manipulators.py    # Span task data manipulation
+│   └── utils/                      # Utility functions
+│       ├── __init__.py
+│       ├── config.py               # Configuration management
+│       ├── data_loader.py          # CSV data loading
+│       └── column_utils.py         # Column manipulation utilities
+├── tests/                          # Test suite
+│   ├── __init__.py
+│   ├── conftest.py                 # Pytest configuration
+│   ├── test_bids_compliance.py     # BIDS format compliance tests
+│   ├── test_calculators.py         # Calculator function tests
+│   ├── test_event_structure.py     # Event structure tests
+│   └── test_span_manipulations.py  # Span manipulation tests
+├── setup.py                        # Package installation setup
+├── requirements.txt                # Python dependencies
+├── README.md                       # This documentation
+└── MANIFEST.in                     # Package manifest
+```
+
 ### Core Modules
 
 #### `rdoc_events_processor/` (Main Package)
@@ -27,7 +63,7 @@ The package is organized into several modules, each handling specific aspects of
 
 #### `data_processing/` (Core Processing Logic)
 - **`processor.py`**: Main event file processor class
-  - `EventFileProcessor`: Core class for processing BIDS data into event files
+  - `EventFileProcessor`: Core class for processing BIDS data into event files (including onset calculation)
   - `create_event_file()`: Creates individual event files
   - `process_subject_sessions()`: Processes all sessions for a subject
   - Task mapping and BIDS filename parsing
@@ -72,6 +108,79 @@ The package is organized into several modules, each handling specific aspects of
   - `local`: Local directory settings
   - `download`: Download parameters
   - `default_subjects`: Default subject list
+
+## Onset Calculation
+
+The package implements sophisticated onset timing calculations through the `EventFileProcessor` class. Onset calculations occur in multiple stages with different functions handling specific aspects of the timing transformation.
+
+### Overview of Onset Processing Flow
+
+1. **Initial Column Mapping**: Raw `time_elapsed` data (milliseconds) is mapped to the `onset` column
+2. **Primary Normalization**: Times are converted to seconds and normalized to a reference point
+3. **Sequence Recalculation**: Span tasks undergo additional timing adjustments based on response times
+
+### Key Functions and Their Roles
+
+#### `_normalize_onsets_to_trigger_start(event_df, output_path)`
+**Location**: `EventFileProcessor.create_event_file()` → Line 265
+**Purpose**: Main onset normalization function that handles the core timing transformation
+
+**What it does**:
+1. **Milliseconds to Seconds Conversion**: Converts `onset` values from milliseconds to seconds (`/ 1000.0`)
+2. **Reference Point Identification**: Locates the `fmri_wait_block_initial` marker to establish the timing reference
+3. **Data Filtering**: Removes all events that occurred before the `fmri_wait_block_trigger_start` marker
+4. **Normalization Formula**: Applies `onset[i] = (time_elapsed[i-1] - initial_onset_time)` to set trigger_start at 0.0 seconds
+
+**Critical Requirements**:
+- File must contain `fmri_wait_block_initial` marker (files without this are skipped)
+- File must contain `fmri_wait_block_trigger_start` marker (files without this are skipped) 
+
+#### `_recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, onset_calculation_type)`
+**Location**: Called from `create_event_file()` for span tasks (Lines 292-294 for opSpan, 381-383 for simpleSpan)
+**Purpose**: Recalculates onset timing within span task sequences using response time data
+
+**What it does**:
+1. **Sequence Detection**: Identifies consecutive sequences of related events (span_recall for opSpan, test_trial clusters for simpleSpan)
+2. **Response Time Integration**: Uses `response_time` data to adjust onset timing within sequences
+3. **Task-Specific Logic**: Implements identical calculation formulas for both opSpan and simpleSpan tasks:
+
+**Logic for unfurling opSpan and simpleSpan span_recall events** (identical):
+- First row in sequence: Keep its normalized onset unchanged (don't modify)
+- Second row in sequence: `onset[i] = onset[i-1] + response_time[i-1]`
+- Subsequent rows: `onset[i] = onset[i-1] + (response_time[i] - response_time[i-1])`
+
+#### `_find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
+**Location**: Called by span task processing logic (Lines 289, 378)
+**Purpose**: Identifies consecutive rows that match a specific condition for sequence-based processing
+
+**What it does**:
+- Finds contiguous blocks of rows matching a boolean condition
+- Returns list of `(start_index, end_index)` tuples for each sequence
+- **Both opSpan and simpleSpan**: Use unified sequence detection with `min_sequence_length=2`
+- **Both tasks**: Look for `trial_id == 'test_trial'` rows (which become `trial_type == 'span_recall'`)
+- **Algorithm**: Both tasks preserve the first row unchanged, but use different formulas for subsequent rows
+
+
+### Processing Order and Dependencies
+
+The onset calculation follows this strict sequence:
+
+1. **Column Mapping** (Lines 113-117): `time_elapsed` → `onset` (raw milliseconds)
+2. **Primary Normalization** (Line 265): `_normalize_onsets_to_trigger_start()` - converts to seconds and normalizes to trigger
+3. **Span Task Recalculation** (Lines 292-294, 381-383): `_recalculate_onsets_for_sequences()` - applies sequence-specific timing adjustments
+
+**Important**: The primary normalization MUST occur before span task recalculation because:
+- It establishes the baseline timing (trigger_start = 0.0s)
+- It converts all timing data to seconds consistently
+- It filters out pre-trigger events that shouldn't be included in span calculations
+
+### Error Handling and Validation
+
+- **Missing Markers**: Files without either `fmri_wait_block_initial` or `fmri_wait_block_trigger_start` are skipped with appropriate logging
+  - Missing `fmri_wait_block_initial`: Tracked as "Missing fmri_wait_block_initial marker"
+  - Missing `fmri_wait_block_trigger_start`: Tracked as "Processing error: No 'fmri_wait_block_trigger_start' trial_id found..."
+- **Data Type Safety**: All numeric conversions use `pd.to_numeric(..., errors='coerce')` for robustness
+- **Precision**: Final onset values are rounded to 5 decimal places for consistency
 
 ## Supported Tasks
 
@@ -173,7 +282,7 @@ The package provides two command-line interfaces:
 rdoc-download --subjects s4 s5 s6
 
 # Specify custom remote path and local directory
-rdoc-download --subjects s4 s5 --remote-path "RDOC_fMRI_Events" --local-path "dropbox_bids"
+rdoc-download --subjects s4 s5 --remote-path "rdoc_fmri_behavior/output/bids" --local-path "dropbox_bids"
 
 # Use custom rclone remote name
 rdoc-download --subjects s4 s5 --remote-name "my_dropbox"
