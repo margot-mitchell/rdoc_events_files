@@ -130,7 +130,7 @@ rdoc_fmri_events/
 
 #### Sequence Recalculation (only applied to span_recall events for simpleSpan and opSpan)
 
-##### (2) `_recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, onset_calculation_type)`
+##### (1) `_recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, onset_calculation_type)`
 **Location**: Called from `create_event_file()` for span tasks (Lines 292-294 for opSpan, 381-383 for simpleSpan)
 **Purpose**: Recalculates onset timing within span task sequences using response time data
 
@@ -144,7 +144,7 @@ rdoc_fmri_events/
 - Second row in sequence: `onset[i] = onset[i-1] + response_time[i-1]`
 - Subsequent rows: `onset[i] = onset[i-1] + (response_time[i] - response_time[i-1])`
 
-##### (3) `_find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
+##### (2) `_find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
 **Location**: Called by span task processing logic (Lines 289, 378)
 **Purpose**: Identifies consecutive rows that match a specific condition for sequence-based processing
 
