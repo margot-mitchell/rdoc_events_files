@@ -71,8 +71,8 @@ rdoc_fmri_events/
 
 - **`calculators.py`**: Task-specific calculation functions
   - `extract_cue_letter_from_image_filename()`: Parses HTML content to extract letter from image filenames (e.g., `lowercase_A.png` → `a`, `uppercase_B.png` → `B`)
-  - `calculate_stop_accuracy()`: Returns accuracy score (1.0/0.0) only for stop trials, sets `'n/a'` for go trials in stopSignal task
-  - `calculate_go_accuracy()`: Returns accuracy score (1.0/0.0) only for go trials, sets `'n/a'` for stop trials in stopSignal task
+  - `calculate_stop_accuracy()`: Returns accuracy score (1.0/0.0) for stop trials, sets `'n/a'` for go trials in stopSignal task
+  - `calculate_go_accuracy()`: Returns accuracy score (1.0/0.0) for go trials, sets `'n/a'` for stop trials in stopSignal task
   - `calculate_trial_type_stopSignal()`: Maps condition + correctness to trial types (e.g., `condition='go'` + `correct_trial=1.0` → `'go_success'`)
   - `calculate_go_nogo_condition()`: Maps condition + correctness to conditions (e.g., `condition='nogo'` + `correct_trial=0.0` → `'nogo_failure'`)
   - `calculate_stop_signal_condition()`: Maps trial types back to basic conditions (e.g., `'stop_success'`/`'stop_failure'` → `'stop'`)
@@ -144,7 +144,7 @@ rdoc_fmri_events/
 
 ##### (1) `_recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, task_name, float_precision=5)`
 
-**Location**: Called from `create_event_file()` for span tasks (Lines 292-294 for opSpan, 381-383 for simpleSpan)
+**Location**: Called from `create_event_file()` for span tasks (Lines 292-294 for opSpan, 339-341 for simpleSpan)
 
 **Purpose**: Recalculates onset timing within span task sequences using response time data
 
@@ -160,7 +160,7 @@ rdoc_fmri_events/
 
 ##### (2) `_find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
 
-**Location**: Called by span task processing logic (Lines 289, 378)
+**Location**: Called by span task processing logic (Lines 289, 336)
 
 **Purpose**: Identifies consecutive rows that match a specific condition for sequence-based processing
 
@@ -175,7 +175,7 @@ The onset calculation follows this strict sequence:
 
 1. **Column Mapping** (Lines 113-117): `time_elapsed` → `onset` (raw milliseconds)
 2. **Primary Normalization** (Line 265): `_normalize_onsets_to_trigger_start()` - converts to seconds and normalizes to trigger
-3. **Span Task Recalculation** (Lines 292-294, 381-383): `_recalculate_onsets_for_sequences()` - applies sequence-specific timing adjustments
+3. **Span Task Recalculation** (Lines 292-294, 339-341): `_recalculate_onsets_for_sequences()` - applies sequence-specific timing adjustments
 
 ## Supported Tasks
 
