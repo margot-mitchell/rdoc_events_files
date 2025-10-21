@@ -117,13 +117,11 @@ rdoc_fmri_events/
 2. **Primary Normalization**: Times are converted to seconds and normalized to a reference point
 3. **Recalculation for simpleSpan and opSpan span_recall sequences**: Span tasks undergo additional timing adjustments based on response times
 
-### Key Functions and Their Roles
+### Primary Normalization: 
 
-#### Primary Normalization: 
+#### (1) `_normalize_onsets_to_trigger_start(event_df, output_path, float_precision=5)`
 
-##### (1) `_normalize_onsets_to_trigger_start(event_df, output_path, float_precision=5)`
-
-**Location**: `EventFileProcessor.create_event_file()` → Line 265
+**Location**: `EventFileProcessor.create_event_file()` → Line 277
 
 **Purpose**: Main onset normalization function that handles the core timing transformation for all tasks
 
@@ -138,11 +136,22 @@ rdoc_fmri_events/
 - File must contain `fmri_wait_block_initial` marker (files without this are skipped)
 - File must contain `fmri_wait_block_trigger_start` marker (files without this are skipped)
 
-#### Sequence Recalculation (only applied to span_recall events for simpleSpan and opSpan)
+### Sequence Recalculation (only applied to span_recall events for simpleSpan and opSpan)
 
-##### (1) `recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, task_name, float_precision=5)`
+#### (1) `find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
 
-**Location**: `span_manipulators.py` - Called from `create_event_file()` for span tasks (Lines 292-294 for opSpan, 339-341 for simpleSpan)
+**Location**: `span_manipulators.py` - Called by span task processing logic (Lines 301, 348)
+
+**Purpose**: Identifies consecutive rows that match a specific condition for sequence-based processing
+
+**What it does**:
+- Finds contiguous blocks of rows matching a boolean condition
+- Returns list of `(start_index, end_index)` tuples for each sequence
+- **Both opSpan and simpleSpan**: Detect sequences with `min_sequence_length=2` of `trial_id == 'test_trial'` rows (which become `trial_type == 'span_recall'`)
+
+#### (2) `recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, task_name, float_precision=5)`
+
+**Location**: `span_manipulators.py` - Called from `create_event_file()` for span tasks (Lines 304-306 for opSpan, 351-353 for simpleSpan)
 
 **Purpose**: Recalculates onset timing within span task sequences using response time data
 
@@ -156,24 +165,13 @@ rdoc_fmri_events/
 - Second row in sequence: `onset[i] = onset[i-1] + response_time[i-1]`
 - Subsequent rows: `onset[i] = onset[i-1] + (response_time[i] - response_time[i-1])`
 
-##### (2) `find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
-
-**Location**: `span_manipulators.py` - Called by span task processing logic (Lines 289, 336)
-
-**Purpose**: Identifies consecutive rows that match a specific condition for sequence-based processing
-
-**What it does**:
-- Finds contiguous blocks of rows matching a boolean condition
-- Returns list of `(start_index, end_index)` tuples for each sequence
-- **Both opSpan and simpleSpan**: Detect sequences with `min_sequence_length=2` of `trial_id == 'test_trial'` rows (which become `trial_type == 'span_recall'`)
-
 ### Processing Order and Dependencies
 
 The onset calculation follows this strict sequence:
 
-1. **Column Mapping** (Lines 113-117): `time_elapsed` → `onset` (raw milliseconds)
-2. **Primary Normalization** (Line 265): `_normalize_onsets_to_trigger_start()` - converts to seconds and normalizes to trigger
-3. **Span Task Recalculation** (Lines 292-294, 339-341): `recalculate_onsets_for_sequences()` from `span_manipulators.py` - applies sequence-specific timing adjustments
+1. **Column Mapping** (Lines 111-114): `time_elapsed` → `onset` (raw milliseconds)
+2. **Primary Normalization** (Line 277): `_normalize_onsets_to_trigger_start()` - converts to seconds and normalizes to trigger
+3. **Span Task Recalculation** (Lines 304-306, 351-353): `recalculate_onsets_for_sequences()` from `span_manipulators.py` - applies sequence-specific timing adjustments
 
 ## Supported Tasks
 
