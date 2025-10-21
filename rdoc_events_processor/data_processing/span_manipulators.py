@@ -210,14 +210,14 @@ def process_span_data(df, task_name):
                         new_row = row.copy()
                         new_row['valid_cell_selection'] = str(response)
                         new_row['valid_responses'] = str(response)
-                        
+                            
                         if i < len(valid_responses_timestamps):
                             new_row['response_time'] = str(valid_responses_timestamps[i])
                             new_row['valid_responses_timestamps'] = str(valid_responses_timestamps[i])
                         else:
                             new_row['response_time'] = 'n/a'
                             new_row['valid_responses_timestamps'] = ''
-                        
+                            
                         # Clear and set columns appropriately
                         new_row['moving_through_grid_timestamps'] = ''
                         new_row['cell_order_through_grid'] = ''
@@ -228,11 +228,11 @@ def process_span_data(df, task_name):
                         new_row['invalid_cell_selection'] = 'n/a'
                         new_row['correct_cell'] = 'n/a'
                         new_row['cell_movement'] = 'n/a'
-                        
+                    
                         if first_row_added:
                             new_row['response'] = 'n/a'
                         first_row_added = True
-                        
+                    
                         expanded_rows.append(new_row)
             else:
                 # simpleSpan: Standard valid_responses processing
@@ -272,12 +272,12 @@ def process_span_data(df, task_name):
                 for i, response in enumerate(response_list):
                     new_row = row.copy()
                     new_row['invalid_cell_selection'] = str(response)
-                    
+                
                     if i < len(timestamp_list):
                         new_row['response_time'] = str(timestamp_list[i])
                     else:
                         new_row['response_time'] = 'n/a'
-                    
+                
                     # Clear list columns and set non-relevant columns to n/a
                     new_row['moving_through_grid_timestamps'] = ''
                     new_row['cell_order_through_grid'] = ''
@@ -291,11 +291,11 @@ def process_span_data(df, task_name):
                     new_row['valid_cell_selection'] = 'n/a'
                     new_row['correct_cell'] = 'n/a'
                     new_row['cell_movement'] = 'n/a'
-                    
+                
                     if first_row_added:
                         new_row['response'] = 'n/a'
                     first_row_added = True
-                    
+                
                     expanded_rows.append(new_row)
         
         # Handle correct_cell_order alignment (same for both tasks)
@@ -381,18 +381,8 @@ def process_span_data(df, task_name):
     # Sort sequential clusters of test_trial rows by response_time
     result_df = _sort_test_trial_clusters_by_response_time(result_df)
     
-    # Set trial_type based on trial_id
-    if 'trial_id' in result_df.columns and 'trial_type' in result_df.columns:
-        result_df.loc[result_df['trial_id'] == 'test_stim', 'trial_type'] = 'span_encoding'
-        result_df.loc[result_df['trial_id'] == 'test_trial', 'trial_type'] = 'span_recall'
-        
-        # For simpleSpan only: set other trial_id values to n/a
-        if task_name == 'simpleSpan':
-            other_mask = (~result_df['trial_id'].isin(['test_stim', 'test_trial']))
-            result_df.loc[other_mask, 'trial_type'] = 'n/a'
-            logger.info(f"{task_name}: set trial_type based on trial_id - span_encoding for test_stim, span_recall for test_trial, n/a for others")
-        else:
-            logger.info(f"{task_name}: set trial_type based on trial_id - span_encoding for test_stim, span_recall for test_trial")
+    # Note: trial_type setting is now handled by dedicated functions in processor.py
+    # (calculate_opspan_trial_type for opSpan, calculate_simplespan_trial_type for simpleSpan)
     
     # Calculate accuracy using unified approach (opSpan's simpler logic)
     result_df = _calculate_unified_accuracy(result_df, task_name)
@@ -400,6 +390,99 @@ def process_span_data(df, task_name):
     logger.info(f"{task_name}: processed {len(result_df)} rows from {len(df)} input rows")
     
     return result_df
+
+
+def find_consecutive_sequences(event_df, condition_series, min_sequence_length=1):
+    """
+    Find consecutive sequences of rows that match a condition.
+    
+    Used by both opSpan (min_sequence_length=1) and simpleSpan (min_sequence_length=2)
+    to identify sequences of events for onset recalculation.
+    
+    Args:
+        event_df (pd.DataFrame): Event dataframe
+        condition_series (pd.Series): Boolean series indicating which rows match condition
+        min_sequence_length (int): Minimum length of sequence to consider
+        
+    Returns:
+        list: List of (start_index, end_index) tuples for each sequence
+    """
+    sequences_found = []
+    i = 0
+    
+    while i < len(condition_series):
+        if condition_series.iloc[i]:
+            # Found the start of a sequence
+            sequence_start = i
+            sequence_end = i
+            
+            # Find the end of this sequence (consecutive matching rows)
+            while sequence_end < len(condition_series) and condition_series.iloc[sequence_end]:
+                sequence_end += 1
+            sequence_end -= 1  # Back up to the last matching row
+            
+            # Only consider sequences that meet minimum length requirement
+            if sequence_end - sequence_start + 1 >= min_sequence_length:
+                sequences_found.append((sequence_start, sequence_end))
+            
+            # Move to the next row after this sequence
+            i = sequence_end + 1
+        else:
+            i += 1
+            
+    return sequences_found
+
+
+def recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, task_name, float_precision=5):
+    """
+    Recalculate onsets for sequences based on response_time.
+    
+    Unified algorithm for both opSpan and simpleSpan tasks since they use identical formulas.
+    
+    Args:
+        event_df (pd.DataFrame): Event dataframe
+        sequences_found (list): List of (start, end) tuples for sequences
+        response_time_col (pd.Series): Response time data (in seconds, converted upfront)
+        task_name (str): Task name for logging purposes
+        float_precision (int): Number of decimal places for rounding onset values
+        
+    Returns:
+        int: Number of rows modified
+    """
+    rows_modified = 0
+    
+    for seq_idx, (seq_start, seq_end) in enumerate(sequences_found):
+        logger.debug(f"{task_name}: Processing sequence {seq_idx+1}: rows {seq_start} to {seq_end}")
+        
+        for j in range(seq_start, seq_end + 1):
+            if j > 0:  # Make sure we're not at the very first row of the entire dataframe
+                prev_onset_updated = event_df.loc[j - 1, 'onset']
+                
+                # Unified algorithm for both opSpan and simpleSpan
+                # response_time is already in seconds (converted upfront)
+                if j == seq_start:
+                    # First row in sequence: Keep its normalized onset unchanged (don't modify)
+                    pass
+                elif j == seq_start + 1:
+                    # Second row in sequence: onset[i+1] = onset[i] + response_time[i]
+                    rt_prev = pd.to_numeric(response_time_col.iloc[j - 1], errors='coerce')
+                    if pd.notna(rt_prev):
+                        # response_time is already in seconds
+                        new_onset = prev_onset_updated + rt_prev
+                        event_df.loc[j, 'onset'] = round(new_onset, float_precision)
+                        rows_modified += 1
+                else:
+                    # Subsequent rows: onset[i] = onset[i-1] + (response_time[i] - response_time[i-1])
+                    rt_current = pd.to_numeric(response_time_col.iloc[j], errors='coerce')
+                    rt_prev = pd.to_numeric(response_time_col.iloc[j - 1], errors='coerce')
+                    
+                    if pd.notna(rt_current) and pd.notna(rt_prev):
+                        # response_time values are already in seconds
+                        new_onset = prev_onset_updated + (rt_current - rt_prev)
+                        event_df.loc[j, 'onset'] = round(new_onset, float_precision)
+                        rows_modified += 1
+    
+    return rows_modified
 
 
 def process_opspan_data(df):
@@ -490,5 +573,70 @@ def _sort_test_trial_clusters_by_response_time(result_df):
             sorted_df.iloc[start:end+1] = cluster_sorted.values
     
     return sorted_df
+
+
+def calculate_opspan_trial_type(trial_id_series):
+    """
+    Calculate trial_type for opSpan task based on trial_id.
+    
+    Args:
+        trial_id_series (pd.Series): Series containing trial_id values
+        
+    Returns:
+        tuple: (trial_type_series, counts_dict) where counts_dict contains counts of each type
+    """
+    trial_type_series = trial_id_series.copy()
+    
+    # Set trial_type based on trial_id
+    encoding_mask = (trial_id_series == 'test_stim')
+    recall_mask = (trial_id_series == 'test_trial')
+    operation_mask = (trial_id_series == 'test_inter-stimulus')
+    iti_mask = (trial_id_series == 'test_ITI')
+    
+    trial_type_series.loc[encoding_mask] = 'span_encoding'
+    trial_type_series.loc[recall_mask] = 'span_recall'
+    trial_type_series.loc[operation_mask] = 'operation'
+    trial_type_series.loc[iti_mask] = 'n/a'
+    
+    counts = {
+        'encoding': encoding_mask.sum(),
+        'recall': recall_mask.sum(),
+        'operation': operation_mask.sum(),
+        'iti': iti_mask.sum()
+    }
+    
+    return trial_type_series, counts
+
+
+def calculate_simplespan_trial_type(trial_id_series):
+    """
+    Calculate trial_type for simpleSpan task based on trial_id.
+    
+    Args:
+        trial_id_series (pd.Series): Series containing trial_id values
+        
+    Returns:
+        tuple: (trial_type_series, counts_dict) where counts_dict contains counts of each type
+    """
+    trial_type_series = trial_id_series.copy()
+    
+    # Set trial_type based on trial_id
+    encoding_mask = (trial_id_series == 'test_stim')
+    recall_mask = (trial_id_series == 'test_trial')
+    
+    trial_type_series.loc[encoding_mask] = 'span_encoding'
+    trial_type_series.loc[recall_mask] = 'span_recall'
+    
+    # Set all other trial_id values to 'n/a' for simpleSpan
+    other_mask = (~trial_id_series.isin(['test_stim', 'test_trial']))
+    trial_type_series.loc[other_mask] = 'n/a'
+    
+    counts = {
+        'encoding': encoding_mask.sum(),
+        'recall': recall_mask.sum(),
+        'other': other_mask.sum()
+    }
+    
+    return trial_type_series, counts
 
 

@@ -8,12 +8,19 @@ from .calculators import (
     calculate_go_accuracy, 
     calculate_trial_type_stopSignal,
     calculate_go_nogo_condition,
-    calculate_stop_signal_condition,
     extract_cue_letter_from_image_filename,
     calculate_nback_letter_to_match,
-    calculate_opspan_trial_type,
-    calculate_oponlyspan_accuracy_and_trial_type,
     apply_cuedts_condition_mappings
+)
+from .span_manipulators import (
+    process_span_data,
+    process_opspan_data,
+    process_simplespan_data,
+    _calculate_unified_accuracy,
+    find_consecutive_sequences,
+    recalculate_onsets_for_sequences,
+    calculate_opspan_trial_type,
+    calculate_simplespan_trial_type
 )
 
 __all__ = [
@@ -22,10 +29,15 @@ __all__ = [
     "calculate_go_accuracy",
     "calculate_trial_type_stopSignal", 
     "calculate_go_nogo_condition",
-    "calculate_stop_signal_condition",
     "extract_cue_letter_from_image_filename",
     "calculate_nback_letter_to_match",
-    "calculate_opspan_trial_type", 
-    "calculate_oponlyspan_accuracy_and_trial_type",
-    "apply_cuedts_condition_mappings"
+    "apply_cuedts_condition_mappings",
+    "process_span_data",
+    "process_opspan_data",
+    "process_simplespan_data",
+    "_calculate_unified_accuracy",
+    "find_consecutive_sequences",
+    "recalculate_onsets_for_sequences",
+    "calculate_opspan_trial_type",
+    "calculate_simplespan_trial_type"
 ]

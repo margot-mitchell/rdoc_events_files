@@ -11,10 +11,10 @@ from rdoc_events_processor.data_processing.calculators import (
     calculate_trial_type_stopSignal,
     calculate_go_nogo_condition,
     extract_cue_letter_from_image_filename,
-    calculate_stop_signal_condition,
-    calculate_opspan_trial_type,
-    calculate_oponlyspan_accuracy_and_trial_type,
     apply_cuedts_condition_mappings
+)
+from rdoc_events_processor.data_processing.span_manipulators import (
+    calculate_opspan_trial_type
 )
 
 
@@ -119,116 +119,6 @@ class TestCueLetterExtraction:
         assert extract_cue_letter_from_image_filename('invalid_stimulus') == ''
         assert extract_cue_letter_from_image_filename(None) == ''
         assert extract_cue_letter_from_image_filename('') == ''
-
-
-class TestOpOnlySpanAccuracy:
-    """Test accuracy calculation for opOnlySpan task."""
-    
-    def test_oponlyspan_accuracy_correct_response(self):
-        """Test that acc=1.0 when correct_response equals response."""
-        import pandas as pd
-        from pathlib import Path
-        
-        # Find opOnlySpan output files
-        output_dir = Path("output")
-        oponlyspan_files = list(output_dir.glob("**/sub-*_task-opOnlySpan_run-*_events.tsv"))
-        
-        if not oponlyspan_files:
-            pytest.skip("No opOnlySpan output files found")
-        
-        accuracy_issues = []
-        
-        for file_path in oponlyspan_files:
-            try:
-                df = pd.read_csv(file_path, sep='\t')
-                
-                # Find rows where both correct_response and response are not empty/n/a
-                valid_rows = df[
-                    (df['correct_response'].notna()) & 
-                    (df['correct_response'] != '') & 
-                    (df['correct_response'] != 'n/a') &
-                    (df['response'].notna()) & 
-                    (df['response'] != '') & 
-                    (df['response'] != 'n/a') &
-                    (df['acc'].notna()) & 
-                    (df['acc'] != '') & 
-                    (df['acc'] != 'n/a')
-                ]
-                
-                for idx, row in valid_rows.iterrows():
-                    correct_response = str(row['correct_response']).strip()
-                    response = str(row['response']).strip()
-                    acc = row['acc']
-                    
-                    if correct_response == response:
-                        if acc != 1.0:
-                            accuracy_issues.append(
-                                f"{file_path.name} row {idx}: correct_response='{correct_response}' == response='{response}' "
-                                f"but acc={acc} (should be 1.0)"
-                            )
-                    else:
-                        if acc != 0.0:
-                            accuracy_issues.append(
-                                f"{file_path.name} row {idx}: correct_response='{correct_response}' != response='{response}' "
-                                f"but acc={acc} (should be 0.0)"
-                            )
-                            
-            except Exception as e:
-                accuracy_issues.append(f"{file_path.name}: Error processing - {str(e)}")
-        
-        if accuracy_issues:
-            error_msg = "opOnlySpan accuracy calculation issues:\n"
-            for issue in accuracy_issues:
-                error_msg += f"  {issue}\n"
-            error_msg += "\nAccuracy should be 1.0 when correct_response == response, 0.0 when they differ"
-            pytest.fail(error_msg)
-    
-    def test_oponlyspan_accuracy_no_response(self):
-        """Test that acc=0.0 when correct_response is not empty but response is n/a."""
-        import pandas as pd
-        from pathlib import Path
-        
-        # Find opOnlySpan output files
-        output_dir = Path("output")
-        oponlyspan_files = list(output_dir.glob("**/sub-*_task-opOnlySpan_run-*_events.tsv"))
-        
-        if not oponlyspan_files:
-            pytest.skip("No opOnlySpan output files found")
-        
-        accuracy_issues = []
-        
-        for file_path in oponlyspan_files:
-            try:
-                df = pd.read_csv(file_path, sep='\t')
-                
-                # Find rows where correct_response is not empty but response is n/a/empty
-                no_response_rows = df[
-                    (df['correct_response'].notna()) & 
-                    (df['correct_response'] != '') & 
-                    (df['correct_response'] != 'n/a') &
-                    (df['response'].isna() | (df['response'] == '') | (df['response'] == 'n/a')) &
-                    (df['acc'].notna()) & 
-                    (df['acc'] != '') & 
-                    (df['acc'] != 'n/a')
-                ]
-                
-                for idx, row in no_response_rows.iterrows():
-                    acc = row['acc']
-                    if acc != 0.0:
-                        accuracy_issues.append(
-                            f"{file_path.name} row {idx}: correct_response='{row['correct_response']}' but response is n/a "
-                            f"and acc={acc} (should be 0.0)"
-                        )
-                        
-            except Exception as e:
-                accuracy_issues.append(f"{file_path.name}: Error processing - {str(e)}")
-        
-        if accuracy_issues:
-            error_msg = "opOnlySpan accuracy calculation issues for no-response cases:\n"
-            for issue in accuracy_issues:
-                error_msg += f"  {issue}\n"
-            error_msg += "\nAccuracy should be 0.0 when correct_response is not empty but response is n/a"
-            pytest.fail(error_msg)
 
 
 class TestNBackLetterToMatch:
@@ -368,29 +258,6 @@ class TestNBackLetterToMatch:
             pytest.fail(error_msg)
 
 
-class TestStopSignalConditionCalculation:
-    """Test stop_signal_condition calculation."""
-    
-    def test_calculate_stop_signal_condition_stop_trials(self):
-        """Test stop_signal_condition for stop trials."""
-        assert calculate_stop_signal_condition('stop_success') == 'stop'
-        assert calculate_stop_signal_condition('stop_failure') == 'stop'
-    
-    def test_calculate_stop_signal_condition_go_trials(self):
-        """Test stop_signal_condition for go trials."""
-        assert calculate_stop_signal_condition('go_success') == 'go'
-        assert calculate_stop_signal_condition('go_failure') == 'go'
-    
-    def test_calculate_stop_signal_condition_na_values(self):
-        """Test stop_signal_condition for n/a values."""
-        assert calculate_stop_signal_condition('n/a') == 'n/a'
-        assert calculate_stop_signal_condition('') == 'n/a'
-        assert calculate_stop_signal_condition(None) == 'n/a'
-        assert calculate_stop_signal_condition(pd.NA) == 'n/a'
-    
-    def test_calculate_stop_signal_condition_invalid_values(self):
-        """Test stop_signal_condition for invalid trial types."""
-        assert calculate_stop_signal_condition('invalid_trial') == 'n/a'
 
 
 class TestOpSpanTrialTypeCalculation:
@@ -424,58 +291,6 @@ class TestOpSpanTrialTypeCalculation:
         assert counts == {'encoding': 0, 'recall': 0, 'operation': 0, 'iti': 0}
 
 
-class TestOpOnlySpanAccuracyAndTrialType:
-    """Test opOnlySpan accuracy and trial_type calculation."""
-    
-    def test_calculate_oponlyspan_both_responses_present_match(self):
-        """Test accuracy when both correct_response and response are present and match."""
-        # Create test data
-        event_data = {
-            'correct_response': pd.Series(['A', 'B', 'C']),
-            'response': pd.Series(['A', 'B', 'D']),
-            'trial_id': pd.Series(['test_inter-stimulus'] * 3),
-            'trial_type': pd.Series([''] * 3)
-        }
-        original_correct_trial = pd.Series([None, None, None])
-        
-        new_acc, trial_type = calculate_oponlyspan_accuracy_and_trial_type(event_data, original_correct_trial)
-        
-        # First two should be 1.0 (match), third should be 0.0 (no match)
-        assert new_acc.iloc[0] == 1.0
-        assert new_acc.iloc[1] == 1.0
-        assert new_acc.iloc[2] == 0.0
-        assert all(trial_type == 'operation')
-    
-    def test_calculate_oponlyspan_no_response_case(self):
-        """Test accuracy when correct_response is present but response is n/a."""
-        event_data = {
-            'correct_response': pd.Series(['A', 'B']),
-            'response': pd.Series(['n/a', '']),
-            'trial_id': pd.Series(['test_inter-stimulus'] * 2),
-            'trial_type': pd.Series([''] * 2)
-        }
-        original_correct_trial = pd.Series([None, 'n/a'])
-        
-        new_acc, trial_type = calculate_oponlyspan_accuracy_and_trial_type(event_data, original_correct_trial)
-        
-        # Should be 0.0 when correct_response is present but response is n/a/empty
-        assert new_acc.iloc[0] == 0.0
-        assert new_acc.iloc[1] == 0.0
-    
-    def test_calculate_oponlyspan_trial_type_mapping(self):
-        """Test trial_type mapping for opOnlySpan."""
-        event_data = {
-            'correct_response': pd.Series(['A']),
-            'response': pd.Series(['A']),
-            'trial_id': pd.Series(['test_inter-stimulus']),
-            'trial_type': pd.Series(['original_type'])
-        }
-        original_correct_trial = pd.Series([1.0])
-        
-        new_acc, trial_type = calculate_oponlyspan_accuracy_and_trial_type(event_data, original_correct_trial)
-        
-        # Should set trial_type to 'operation' for test_inter-stimulus
-        assert trial_type.iloc[0] == 'operation'
 
 
 class TestCuedTSConditionMappings:

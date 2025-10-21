@@ -151,30 +151,6 @@ def calculate_go_nogo_condition(row):
     return 'n/a'
 
 
-def calculate_stop_signal_condition(trial_type_value):
-    """
-    Calculate stop_signal_condition for stopSignal task based on trial_type.
-    
-    Args:
-        trial_type_value (str): The trial_type value
-        
-    Returns:
-        str: 'stop', 'go', or 'n/a'
-    """
-    # If trial_type is n/a or empty, return n/a
-    if pd.isna(trial_type_value) or trial_type_value == '' or trial_type_value == 'n/a':
-        return 'n/a'
-    
-    # If trial_type is stop_failure or stop_success, return stop
-    if trial_type_value in ['stop_failure', 'stop_success']:
-        return 'stop'
-    
-    # If trial_type is go_success or go_failure, return go
-    if trial_type_value in ['go_success', 'go_failure']:
-        return 'go'
-    
-    # For any other value, return n/a
-    return 'n/a'
 
 
 def calculate_nback_letter_to_match(event_data, delay_data, trial_type_data):
@@ -283,89 +259,6 @@ def calculate_nback_letter_to_match(event_data, delay_data, trial_type_data):
     
     return letter_to_match
 
-
-def calculate_opspan_trial_type(trial_id_series):
-    """
-    Calculate trial_type for opSpan task based on trial_id.
-    
-    Args:
-        trial_id_series (pd.Series): Series containing trial_id values
-        
-    Returns:
-        tuple: (trial_type_series, counts_dict) where counts_dict contains counts of each type
-    """
-    trial_type_series = trial_id_series.copy()
-    
-    # Set trial_type based on trial_id
-    encoding_mask = (trial_id_series == 'test_stim')
-    recall_mask = (trial_id_series == 'test_trial')
-    operation_mask = (trial_id_series == 'test_inter-stimulus')
-    iti_mask = (trial_id_series == 'test_ITI')
-    
-    trial_type_series.loc[encoding_mask] = 'span_encoding'
-    trial_type_series.loc[recall_mask] = 'span_recall'
-    trial_type_series.loc[operation_mask] = 'operation'
-    trial_type_series.loc[iti_mask] = 'n/a'
-    
-    counts = {
-        'encoding': encoding_mask.sum(),
-        'recall': recall_mask.sum(),
-        'operation': operation_mask.sum(),
-        'iti': iti_mask.sum()
-    }
-    
-    return trial_type_series, counts
-
-
-def calculate_oponlyspan_accuracy_and_trial_type(event_data, original_correct_trial):
-    """
-    Calculate accuracy and trial_type for opOnlySpan task.
-    
-    Args:
-        event_data (dict): Event data dictionary containing correct_response and response
-        original_correct_trial (pd.Series): Original correct_trial values from input data
-        
-    Returns:
-        tuple: (new_acc_series, trial_type_series)
-    """
-    correct_response = event_data.get('correct_response', pd.Series())
-    response = event_data.get('response', pd.Series())
-    trial_id_series = event_data.get('trial_id', pd.Series())
-    
-    # Start with original correct_trial values
-    new_acc = original_correct_trial.copy()
-    
-    # Case 1: When both correct_response and response are present, calculate acc based on match
-    both_present_mask = (
-        (correct_response.notna() & (correct_response != '') & (correct_response != 'n/a')) &
-        (response.notna() & (response != '') & (response != 'n/a'))
-    )
-    
-    # For rows where both are present, compare them
-    for idx in new_acc[both_present_mask].index:
-        if str(correct_response.loc[idx]).strip() == str(response.loc[idx]).strip():
-            new_acc.loc[idx] = 1.0
-        else:
-            new_acc.loc[idx] = 0.0
-    
-    # Case 2: When correct_trial is empty but correct_response is not empty and response is n/a, set acc = 0.0
-    no_response_mask = (
-        (original_correct_trial.isna() | (original_correct_trial == '') | (original_correct_trial == 'n/a')) &
-        (correct_response.notna() & (correct_response != '') & (correct_response != 'n/a')) &
-        (response.isna() | (response == '') | (response == 'n/a'))
-    )
-    
-    new_acc.loc[no_response_mask] = 0.0
-    
-    # Set trial_type for opOnlySpan
-    trial_type_series = event_data.get('trial_type', pd.Series()).copy()
-    if not trial_type_series.empty and not trial_id_series.empty:
-        # Set to "operation" for test_inter-stimulus rows
-        trial_type_series.loc[trial_id_series == 'test_inter-stimulus'] = 'operation'
-        # Set to "n/a" for all other rows
-        trial_type_series.loc[trial_id_series != 'test_inter-stimulus'] = 'n/a'
-    
-    return new_acc, trial_type_series
 
 
 def apply_cuedts_condition_mappings(event_df):

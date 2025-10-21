@@ -13,13 +13,10 @@ from .calculators import (
     calculate_go_accuracy,
     calculate_trial_type_stopSignal,
     calculate_go_nogo_condition,
-    calculate_stop_signal_condition,
     calculate_nback_letter_to_match,
-    calculate_opspan_trial_type,
-    calculate_oponlyspan_accuracy_and_trial_type,
     apply_cuedts_condition_mappings
 )
-from .span_manipulators import process_span_data
+from .span_manipulators import process_span_data, find_consecutive_sequences, recalculate_onsets_for_sequences, calculate_opspan_trial_type, calculate_simplespan_trial_type
 
 logger = logging.getLogger(__name__)
 
@@ -127,20 +124,21 @@ class EventFileProcessor:
                         event_data[col_name] = data[input_col]
             
             # Special processing for stopSignal task
-            # Calculate trial_type, stop_accuracy, and go_accuracy from the ORIGINAL BIDS data
+            # Copy condition directly to stop_signal_condition, then calculate trial_type and accuracy columns
             if task_name == 'stopSignal':
+                # Copy condition directly to stop_signal_condition (optimized: no need to derive from trial_type)
+                event_data['stop_signal_condition'] = data['condition']
+                
+                # Calculate trial_type, stop_accuracy, and go_accuracy from the ORIGINAL BIDS data
                 event_data['trial_type'] = data.apply(calculate_trial_type_stopSignal, axis=1)
                 event_data['stop_accuracy'] = data.apply(calculate_stop_accuracy, axis=1)
                 event_data['go_accuracy'] = data.apply(calculate_go_accuracy, axis=1)
                 
-                # Calculate stop_signal_condition based on trial_type
-                trial_type_series = event_data['trial_type']
-                event_data['stop_signal_condition'] = trial_type_series.apply(calculate_stop_signal_condition)
-                
                 # Set correct_response to "n/a" for stop trials (stop_failure and stop_success)
                 correct_response_series = event_data.get('correct_response', pd.Series())
                 
-                # Create mask for stop trials
+                # Create mask for stop trials using the trial_type column
+                trial_type_series = event_data['trial_type']
                 stop_trial_mask = trial_type_series.isin(['stop_failure', 'stop_success'])
                 
                 # Set correct_response to "n/a" for stop trials
@@ -153,15 +151,19 @@ class EventFileProcessor:
                 event_data['go_nogo_condition'] = data.apply(calculate_go_nogo_condition, axis=1)
             
             # Special processing for opOnlySpan task
-            # Calculate acc based on correct_response vs response
+            # Use correct_trial directly for accuracy, set trial_type based on trial_id
             if task_name == 'opOnlySpan':
-                # Get the original correct_trial column from input data
-                original_correct_trial = data.get('correct_trial', pd.Series())
+                # Use correct_trial directly (no calculation needed - it's already accurate)
+                event_data['acc'] = data.get('correct_trial', pd.Series())
                 
-                new_acc, trial_type_series = calculate_oponlyspan_accuracy_and_trial_type(event_data, original_correct_trial)
-                
-                event_data['acc'] = new_acc
-                if not trial_type_series.empty:
+                # Set trial_type based on trial_id
+                trial_id_series = event_data.get('trial_id', pd.Series())
+                trial_type_series = event_data.get('trial_type', pd.Series()).copy()
+                if not trial_type_series.empty and not trial_id_series.empty:
+                    # Set to "operation" for test_inter-stimulus rows
+                    trial_type_series.loc[trial_id_series == 'test_inter-stimulus'] = 'operation'
+                    # Set to "n/a" for all other rows
+                    trial_type_series.loc[trial_id_series != 'test_inter-stimulus'] = 'n/a'
                     event_data['trial_type'] = trial_type_series
             
             # Note: simpleSpan accuracy calculation is handled after span processing below
@@ -259,6 +261,16 @@ class EventFileProcessor:
                 if any(counts.values()):
                     logger.info(f"Updated trial_type for opSpan: {counts['encoding']} rows set to 'span_encoding', {counts['recall']} rows set to 'span_recall', {counts['operation']} rows set to 'operation', {counts['iti']} rows set to 'n/a'")
             
+            # Special processing for simpleSpan task - modify trial_type based on trial_id
+            if task_name == 'simpleSpan' and 'trial_id' in event_df.columns and 'trial_type' in event_df.columns:
+                trial_id_col = event_df['trial_id']
+                
+                trial_type_series, counts = calculate_simplespan_trial_type(trial_id_col)
+                event_df['trial_type'] = trial_type_series
+                
+                if any(counts.values()):
+                    logger.info(f"Updated trial_type for simpleSpan: {counts['encoding']} rows set to 'span_encoding', {counts['recall']} rows set to 'span_recall', {counts['other']} rows set to 'n/a'")
+            
             # Convert onset from milliseconds to seconds and normalize to trigger start
             # This MUST happen before opSpan/simpleSpan onset recalculation
             float_precision = output_settings.get('float_precision', 5)  # Default to 5 if not specified
@@ -286,10 +298,10 @@ class EventFileProcessor:
                     is_span = (trial_id_col == 'test_trial')
                     
                     # Find consecutive sequences of test_trial rows (unified with simpleSpan logic)
-                    sequences_found = self._find_consecutive_sequences(event_df, is_span, min_sequence_length=2)
+                    sequences_found = find_consecutive_sequences(event_df, is_span, min_sequence_length=2)
                     
                     # Recalculate onsets for these sequences using unified algorithm
-                    rows_modified = self._recalculate_onsets_for_sequences(
+                    rows_modified = recalculate_onsets_for_sequences(
                         event_df, sequences_found, response_time_col, task_name, float_precision
                     )
                     
@@ -333,10 +345,10 @@ class EventFileProcessor:
                     is_test_trial = (trial_id_col == 'test_trial')
                     
                     # Find consecutive sequences of test_trial rows (requires 2+ consecutive rows)
-                    sequences_found = self._find_consecutive_sequences(event_df, is_test_trial, min_sequence_length=2)
+                    sequences_found = find_consecutive_sequences(event_df, is_test_trial, min_sequence_length=2)
                     
                     # Recalculate onsets for these sequences using unified algorithm
-                    rows_modified = self._recalculate_onsets_for_sequences(
+                    rows_modified = recalculate_onsets_for_sequences(
                         event_df, sequences_found, response_time_col, task_name, float_precision
                     )
                     
@@ -686,93 +698,3 @@ class EventFileProcessor:
                    f"trigger_start now at 0.0s")
         return True, event_df
     
-    def _find_consecutive_sequences(self, event_df, condition_series, min_sequence_length=1):
-        """
-        Find consecutive sequences of rows that match a condition.
-        
-        Used by both opSpan (min_sequence_length=1) and simpleSpan (min_sequence_length=2)
-        to identify sequences of events for onset recalculation.
-        
-        Args:
-            event_df (pd.DataFrame): Event dataframe
-            condition_series (pd.Series): Boolean series indicating which rows match condition
-            min_sequence_length (int): Minimum length of sequence to consider
-            
-        Returns:
-            list: List of (start_index, end_index) tuples for each sequence
-        """
-        sequences_found = []
-        i = 0
-        
-        while i < len(condition_series):
-            if condition_series.iloc[i]:
-                # Found the start of a sequence
-                sequence_start = i
-                sequence_end = i
-                
-                # Find the end of this sequence (consecutive matching rows)
-                while sequence_end < len(condition_series) and condition_series.iloc[sequence_end]:
-                    sequence_end += 1
-                sequence_end -= 1  # Back up to the last matching row
-                
-                # Only consider sequences that meet minimum length requirement
-                if sequence_end - sequence_start + 1 >= min_sequence_length:
-                    sequences_found.append((sequence_start, sequence_end))
-                
-                # Move to the next row after this sequence
-                i = sequence_end + 1
-            else:
-                i += 1
-                
-        return sequences_found
-    
-    def _recalculate_onsets_for_sequences(self, event_df, sequences_found, response_time_col, task_name, float_precision=5):
-        """
-        Recalculate onsets for sequences based on response_time.
-        
-        Unified algorithm for both opSpan and simpleSpan tasks since they use identical formulas.
-        
-        Args:
-            event_df (pd.DataFrame): Event dataframe
-            sequences_found (list): List of (start, end) tuples for sequences
-            response_time_col (pd.Series): Response time data (in seconds, converted upfront)
-            task_name (str): Task name for logging purposes
-            float_precision (int): Number of decimal places for rounding onset values
-            
-        Returns:
-            int: Number of rows modified
-        """
-        rows_modified = 0
-        
-        for seq_idx, (seq_start, seq_end) in enumerate(sequences_found):
-            logger.debug(f"{task_name}: Processing sequence {seq_idx+1}: rows {seq_start} to {seq_end}")
-            
-            for j in range(seq_start, seq_end + 1):
-                if j > 0:  # Make sure we're not at the very first row of the entire dataframe
-                    prev_onset_updated = event_df.loc[j - 1, 'onset']
-                    
-                    # Unified algorithm for both opSpan and simpleSpan
-                    # response_time is already in seconds (converted upfront)
-                    if j == seq_start:
-                        # First row in sequence: Keep its normalized onset unchanged (don't modify)
-                        pass
-                    elif j == seq_start + 1:
-                        # Second row in sequence: onset[i+1] = onset[i] + response_time[i]
-                        rt_prev = pd.to_numeric(response_time_col.iloc[j - 1], errors='coerce')
-                        if pd.notna(rt_prev):
-                            # response_time is already in seconds
-                            new_onset = prev_onset_updated + rt_prev
-                            event_df.loc[j, 'onset'] = round(new_onset, float_precision)
-                            rows_modified += 1
-                    else:
-                        # Subsequent rows: onset[i] = onset[i-1] + (response_time[i] - response_time[i-1])
-                        rt_current = pd.to_numeric(response_time_col.iloc[j], errors='coerce')
-                        rt_prev = pd.to_numeric(response_time_col.iloc[j - 1], errors='coerce')
-                        
-                        if pd.notna(rt_current) and pd.notna(rt_prev):
-                            # response_time values are already in seconds
-                            new_onset = prev_onset_updated + (rt_current - rt_prev)
-                            event_df.loc[j, 'onset'] = round(new_onset, float_precision)
-                            rows_modified += 1
-        
-        return rows_modified

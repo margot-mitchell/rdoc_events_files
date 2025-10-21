@@ -69,29 +69,28 @@ rdoc_fmri_events/
   - `process_subject_sessions()`: Processes all sessions for a subject
   - Task mapping and BIDS filename parsing
 
-- **`calculators.py`**: Task-specific calculation functions
+- **`calculators.py`**: Task-specific calculation functions (nBack, stopSignal, GNG, cuedTS)
   - `extract_cue_letter_from_image_filename()`: Parses HTML content to extract letter from image filenames (e.g., `lowercase_A.png` → `a`, `uppercase_B.png` → `B`)
+  - `calculate_nback_letter_to_match()`: Implements n-back working memory logic by finding letter from N trials back in history (1-back or 2-back)
   - `calculate_stop_accuracy()`: Returns accuracy score (1.0/0.0) for stop trials, sets `'n/a'` for go trials in stopSignal task
   - `calculate_go_accuracy()`: Returns accuracy score (1.0/0.0) for go trials, sets `'n/a'` for stop trials in stopSignal task
   - `calculate_trial_type_stopSignal()`: Maps condition + correctness to trial types (e.g., `condition='go'` + `correct_trial=1.0` → `'go_success'`)
   - `calculate_go_nogo_condition()`: Maps condition + correctness to conditions (e.g., `condition='nogo'` + `correct_trial=0.0` → `'nogo_failure'`)
-  - `calculate_stop_signal_condition()`: Maps trial types back to basic conditions (e.g., `'stop_success'`/`'stop_failure'` → `'stop'`)
-  - `calculate_nback_letter_to_match()`: Implements n-back working memory logic by finding letter from N trials back in history (1-back or 2-back)
-  - `calculate_opspan_trial_type()`: Maps `trial_id` values to BIDS event types (`'test_stim'` → `'span_encoding'`, `'test_trial'` → `'span_recall'`)
-  - `calculate_oponlyspan_accuracy_and_trial_type()`: Compares `correct_response` vs `response` for accuracy, sets trial types for operation span
-  - `apply_cuedts_condition_mappings()`: Handles cue/task condition logic by setting appropriate columns to `'n/a'` based on trial types in cued task switching
+  - `apply_cuedts_condition_mappings()`: Manages cue/task condition columns for cuedTS task by setting `correct_response='n/a'` for test_cue trials, `task_condition='n/a'` for test_cue/other trials, `cue_condition='n/a'` for test_trial/other trials, and propagates n/a values to corresponding `cue`/`task` columns
 
-- **`span_manipulators.py`**: Span task data manipulation
-  - `process_span_data()`: **Unified span data processing** - Transforms compressed span task data into individual event rows:
-    - Converts list columns stored as strings (e.g., `[100, 500, 900]`) into separate rows for each timestamp/response
+- **`span_manipulators.py`**: Span task data manipulation and onset recalculation (simpleSpan and opSpan)
+  - `process_span_data()`: **1st** - Transforms compressed span task data into individual event rows:
+    - Converts list columns stored as strings (e.g., `valid_response_timestamps` = `[100, 500, 900]` and `valid_respones` = `[1, 2, 3]`) into separate rows for each timestamp/response
     - Maintains correspondence between related lists (e.g., `timestamp[i]` aligns with `response[i]` and `cell_order[i]`)
-    - Handles different response types (valid_responses, duplicate_responses, extra_responses) with proper column mapping
     - Processes `moving_through_grid_timestamps` and `valid_responses_timestamps` to create `response_time` values
     - Maps `cell_order_through_grid` to `cell_movement` for each expanded row
-    - Sets `valid_cell_selection`, `invalid_cell_selection` based on response type
-    - Groups consecutive `test_trial` rows and sorts each cluster by `response_time`
-    - Sets `trial_type` as `span_encoding` for `test_stim` and `span_recall` for `test_trial` rows
+    - Sets `valid_cell_selection`, `invalid_cell_selection` based on response type (`valid_responses`, `duplicate_responses`, `extra_responses`) where "invalid" includes both duplicate and extra responses
+    - Sorts consecutive `test_trial` rows by `response_time` within clusters
     - Computes accuracy by comparing `valid_cell_selection` vs `correct_cell` (ignoring invalid selections; they get acc = "n/a")
+  - `calculate_opspan_trial_type()`: **2nd** - Maps `trial_id` values to event types (`'test_stim'` → `'span_encoding'`, `'test_trial'` → `'span_recall'`, `'test_inter-stimulus'` → `'operation'`, `'test_ITI'` → `'n/a'`)
+  - `calculate_simplespan_trial_type()`: **2nd** - Maps `trial_id` values to event types (`'test_stim'` → `'span_encoding'`, `'test_trial'` → `'span_recall'`, all others → `'n/a'`)
+  - `find_consecutive_sequences()`: **3rd** - Identifies consecutive test_trial rows for sequence-based processing
+  - `recalculate_onsets_for_sequences()`: **4th** - Recalculates onset timing within test_trial sequences using response time data
 
 #### `utils/` (Utility Functions)
 - **`config.py`**: Configuration management
@@ -117,7 +116,7 @@ rdoc_fmri_events/
 
 1. **Initial Column Mapping**: Raw `time_elapsed` data (milliseconds) is mapped to the `onset` column
 2. **Primary Normalization**: Times are converted to seconds and normalized to a reference point
-3. **Sequence Recalculation**: Span tasks undergo additional timing adjustments based on response times
+3. **Recalculation for simpleSpan and opSpan span_recall sequences**: Span tasks undergo additional timing adjustments based on response times
 
 ### Key Functions and Their Roles
 
@@ -142,9 +141,9 @@ rdoc_fmri_events/
 
 #### Sequence Recalculation (only applied to span_recall events for simpleSpan and opSpan)
 
-##### (1) `_recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, task_name, float_precision=5)`
+##### (1) `recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, task_name, float_precision=5)`
 
-**Location**: Called from `create_event_file()` for span tasks (Lines 292-294 for opSpan, 339-341 for simpleSpan)
+**Location**: `span_manipulators.py` - Called from `create_event_file()` for span tasks (Lines 292-294 for opSpan, 339-341 for simpleSpan)
 
 **Purpose**: Recalculates onset timing within span task sequences using response time data
 
@@ -158,9 +157,9 @@ rdoc_fmri_events/
 - Second row in sequence: `onset[i] = onset[i-1] + response_time[i-1]`
 - Subsequent rows: `onset[i] = onset[i-1] + (response_time[i] - response_time[i-1])`
 
-##### (2) `_find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
+##### (2) `find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
 
-**Location**: Called by span task processing logic (Lines 289, 336)
+**Location**: `span_manipulators.py` - Called by span task processing logic (Lines 289, 336)
 
 **Purpose**: Identifies consecutive rows that match a specific condition for sequence-based processing
 
@@ -175,7 +174,7 @@ The onset calculation follows this strict sequence:
 
 1. **Column Mapping** (Lines 113-117): `time_elapsed` → `onset` (raw milliseconds)
 2. **Primary Normalization** (Line 265): `_normalize_onsets_to_trigger_start()` - converts to seconds and normalizes to trigger
-3. **Span Task Recalculation** (Lines 292-294, 339-341): `_recalculate_onsets_for_sequences()` - applies sequence-specific timing adjustments
+3. **Span Task Recalculation** (Lines 292-294, 339-341): `recalculate_onsets_for_sequences()` from `span_manipulators.py` - applies sequence-specific timing adjustments
 
 ## Supported Tasks
 
@@ -226,7 +225,8 @@ The package follows a structured pipeline for processing RDOC fMRI data:
 - Special handling for span tasks (operation span and simple span)
 - **Unified Processing**: Both opSpan and simpleSpan use the same core logic via `process_span_data()` function
 - Unfurls timestamp and cell movement/selection lists into multiple rows to give each event its own row
-- **Unified Accuracy Calculation**: Both tasks use opSpan's simpler approach (ignores `invalid_cell_selection`, only considers `valid_cell_selection` vs `correct_cell`)
+- **Unified Accuracy Calculation**: Ignores `invalid_cell_selection`, only considers whether `valid_cell_selection` = `correct_cell`
+- **Onset Recalculation**: Contains `find_consecutive_sequences()` and `recalculate_onsets_for_sequences()` functions for span-specific timing adjustments
 
 ### 7. Output Generation
 - Creates TSV event files in BIDS-compliant format
