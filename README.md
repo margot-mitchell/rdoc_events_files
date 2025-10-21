@@ -91,6 +91,7 @@ rdoc_fmri_events/
   - `find_consecutive_sequences()`: **3rd** - Identifies consecutive test_trial rows for sequence-based processing
   - `recalculate_onsets_for_sequences()`: **4th** - Recalculates onset timing within test_trial sequences using response time data
 
+
 #### `utils/` (Utility Functions)
 - **`config.py`**: Configuration management
   - `load_config()`: Loads YAML configuration files
@@ -140,7 +141,7 @@ rdoc_fmri_events/
 
 #### (1) `find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
 
-**Location**: `span_manipulators.py` - Called by span task processing logic (Lines 301, 348)
+**Location**: `span_manipulators.py` - Called from `create_event_file()` for span tasks (Lines 301 for opSpan, 348 for simpleSpan)
 
 **Purpose**: Identifies consecutive rows that match a specific condition for sequence-based processing
 
@@ -169,9 +170,54 @@ rdoc_fmri_events/
 
 The onset calculation follows this strict sequence:
 
-1. **Column Mapping** (Lines 111-114): `time_elapsed` → `onset` (raw milliseconds)
+1. **Column Mapping** (Lines 110-114): `time_elapsed` → `onset` (raw milliseconds)
 2. **Primary Normalization** (Line 277): `_normalize_onsets_to_trigger_start()` - converts to seconds and normalizes to trigger
 3. **Span Task Recalculation** (Lines 304-306, 351-353): `recalculate_onsets_for_sequences()` from `span_manipulators.py` - applies sequence-specific timing adjustments
+
+## Input Data Format
+
+The package expects BIDS format data organized as follows:
+
+```
+input_directory/
+├── sub-s4/
+│   ├── ses-1/
+│   │   └── func/
+│   │       ├── sub-s4_ses-1_task-go_nogo_run-1_rdoc__fmri.csv
+│   │       └── sub-s4_ses-1_task-flanker_run-1_rdoc__fmri.csv
+│   └── ses-2/
+│       └── func/
+│           └── ...
+└── sub-s5/
+    └── ...
+```
+
+## Output Format
+
+Event files are created in the following format:
+
+```
+output_directory/
+├── sub-s04/
+│   ├── ses-01/
+│   │   ├── sub-s04_ses-01_task-goNogo_run-1_events.tsv
+│   │   └── sub-s04_ses-01_task-flanker_run-1_events.tsv
+│   └── ses-02/
+│       └── ...
+└── sub-s05/
+    └── ...
+```
+
+### Column Ordering
+
+Event files follow a consistent column ordering:
+
+1. **Priority columns** (always first, in this order):
+   - `onset` - Event onset time in seconds
+   - `duration` - Event duration 
+   - `trial_type` - Trial condition
+
+2. **All other columns** - Sorted alphabetically
 
 ## Supported Tasks
 
@@ -189,52 +235,6 @@ The package handles specific tasks used in the RDoC fMRI project:
 - Spatial Cueing
 - Stroop
 - Flanker
-
-## Data Processing Pipeline
-
-The package follows a structured pipeline for processing RDOC fMRI data:
-
-### 1. Data Download (`cli/download.py`)
-- Uses rclone to download BIDS format data from Dropbox
-- Validates rclone configuration and remote connectivity
-- Downloads data for specified subjects into local directory structure
-
-### 2. Data Loading (`utils/data_loader.py`)
-- Loads BIDS CSV files using pandas
-- Handles file path resolution and error checking
-
-### 3. Configuration Management (`utils/config.py`)
-- Loads YAML configuration files for column mappings
-- Manages task-specific and global column mappings
-
-### 4. Data Processing (`data_processing/processor.py`)
-- Main `EventFileProcessor` class orchestrates the entire process
-- Maps input column names to event file column names
-- Handles task-specific processing logic
-- Formatting
-
-### 5. Task-Specific Calculations (`data_processing/calculators.py`)
-- Implements calculations specific to each task type
-- Handles accuracy calculations, trial type determination
-- Processes stimulus extraction and condition classification
-
-### 6. Span Task Processing (`data_processing/span_manipulators.py`)
-- **Unified Processing**: Both opSpan and simpleSpan use the same core logic via `process_span_data()` function
-- **Data Expansion**: Converts compressed span task data into individual event rows by unfurling timestamp and cell movement/selection lists
-- **List Processing**: Parses string representations of lists (e.g., `valid_response_timestamps` = `[100, 500, 900]`) into separate rows for each timestamp/response
-- **Response Mapping**: Maintains correspondence between related lists (e.g., `timestamp[i]` aligns with `response[i]` and `cell_order[i]`)
-- **Time Calculation**: Processes `moving_through_grid_timestamps` and `valid_responses_timestamps` to create `response_time` values
-- **Cell Movement Mapping**: Maps `cell_order_through_grid` to `cell_movement` for each expanded row
-- **Response Classification**: Sets `valid_cell_selection`, `invalid_cell_selection` based on response type (`valid_responses`, `duplicate_responses`, `extra_responses`)
-- **Sorting**: Sorts consecutive `test_trial` rows by `response_time` within clusters
-- **Trial Type Mapping**: Maps `trial_id` values to event types (`'test_stim'` → `'span_encoding'`, `'test_trial'` → `'span_recall'`, etc.)
-- **Unified Accuracy Calculation**: Compares `valid_cell_selection` vs `correct_cell` (ignores invalid selections; they get acc = "n/a")
-- **Onset Recalculation**: Contains `find_consecutive_sequences()` and `recalculate_onsets_for_sequences()` functions for span-specific timing adjustments
-
-### 7. Output Generation
-- Creates TSV event files in BIDS-compliant format
-- Maintains proper directory structure (sub-XX/ses-XX/)
-- Applies consistent naming conventions
 
 ## Installation
 
@@ -384,51 +384,6 @@ download:
   checkers: 8
   progress: true
 ```
-
-## Input Data Format
-
-The package expects BIDS format data organized as follows:
-
-```
-input_directory/
-├── sub-s4/
-│   ├── ses-1/
-│   │   └── func/
-│   │       ├── sub-s4_ses-1_task-go_nogo_run-1_rdoc__fmri.csv
-│   │       └── sub-s4_ses-1_task-flanker_run-1_rdoc__fmri.csv
-│   └── ses-2/
-│       └── func/
-│           └── ...
-└── sub-s5/
-    └── ...
-```
-
-## Output Format
-
-Event files are created in the following format:
-
-```
-output_directory/
-├── sub-s04/
-│   ├── ses-01/
-│   │   ├── sub-s04_ses-01_task-goNogo_run-1_events.tsv
-│   │   └── sub-s04_ses-01_task-flanker_run-1_events.tsv
-│   └── ses-02/
-│       └── ...
-└── sub-s05/
-    └── ...
-```
-
-### Column Ordering
-
-Event files follow a consistent column ordering:
-
-1. **Priority columns** (always first, in this order):
-   - `onset` - Event onset time in seconds
-   - `duration` - Event duration 
-   - `trial_type` - Trial condition
-
-2. **All other columns** - Sorted alphabetically
 
 ## Development
 
