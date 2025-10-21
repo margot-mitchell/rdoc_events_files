@@ -19,7 +19,7 @@ from .calculators import (
     calculate_oponlyspan_accuracy_and_trial_type,
     apply_cuedts_condition_mappings
 )
-from .span_manipulators import unfurl_and_align_span_recall_events
+from .span_manipulators import process_span_data
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +247,7 @@ class EventFileProcessor:
             # Special processing for span tasks - expand list columns
             if task_name in ['opSpan', 'simpleSpan']:
                 logger.info(f"Processing span task data for {task_name}")
-                event_df = unfurl_and_align_span_recall_events(event_df, task_name)
+                event_df = process_span_data(event_df, task_name)
             
             # Special processing for opSpan task - modify trial_type based on trial_id
             if task_name == 'opSpan' and 'trial_id' in event_df.columns and 'trial_type' in event_df.columns:

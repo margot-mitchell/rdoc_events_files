@@ -468,7 +468,7 @@ class TestSpanManipulations:
         This tests the complete flow from raw data to processed event data for both
         opSpan and simpleSpan tasks.
         """
-        from rdoc_events_processor.data_processing.span_manipulators import unfurl_and_align_span_recall_events
+        from rdoc_events_processor.data_processing.span_manipulators import process_span_data
         
         # Test data with moving_through_grid_timestamps and cell_order_through_grid
         # Span processing expands based on moving_through_grid_timestamps, not just cell_order
@@ -486,7 +486,7 @@ class TestSpanManipulations:
         })
         
         # Process for opSpan
-        result_opspan = unfurl_and_align_span_recall_events(input_data, 'opSpan')
+        result_opspan = process_span_data(input_data, 'opSpan')
         
         # Should have expanded rows (3 + 2 = 5 rows)
         assert len(result_opspan) == 5, f"Expected 5 rows for opSpan, got {len(result_opspan)}"
@@ -514,7 +514,7 @@ class TestSpanManipulations:
         assert len(result_opspan) == 5, "Should have 5 expanded rows"
         
         # Process for simpleSpan (should work similarly)
-        result_simplespan = unfurl_and_align_span_recall_events(input_data, 'simpleSpan')
+        result_simplespan = process_span_data(input_data, 'simpleSpan')
         
         # Should have same number of expanded rows
         assert len(result_simplespan) == 5, f"Expected 5 rows for simpleSpan, got {len(result_simplespan)}"

@@ -34,7 +34,9 @@ rdoc_fmri_events/
 │   ├── test_bids_compliance.py     
 │   ├── test_calculators.py         
 │   ├── test_event_structure.py     
-│   └── test_span_manipulations.py  s
+│   ├── test_processor_error_handling.py
+│   ├── test_span_manipulations.py  
+│   └── test_span_tasks.py.disabled
 ├── setup.py                        # Package installation setup
 ├── requirements.txt                # Python dependencies
 ├── README.md                       # This documentation
@@ -68,26 +70,33 @@ rdoc_fmri_events/
   - Task mapping and BIDS filename parsing
 
 - **`calculators.py`**: Task-specific calculation functions
-  - `extract_cue_letter_from_image_filename()`: Extracts letters from nBack task HTML stimuli image filenames
-  - `calculate_stop_accuracy()`: Calculates stop signal accuracy
-  - `calculate_go_accuracy()`: Calculates go trial accuracy
-  - `calculate_trial_type_stopSignal()`: Determines stop signal trial types
-  - `calculate_go_nogo_condition()`: Processes go/nogo conditions
-  - `calculate_stop_signal_condition()`: Processes stop signal conditions
-  - `calculate_nback_letter_to_match()`: Calculates letter_to_match for nBack task with n-back reference logic (supports 1-back and 2-back)
-  - `calculate_opspan_trial_type()`: Maps trial_id to trial_type for opSpan task
-  - `calculate_oponlyspan_accuracy_and_trial_type()`: Calculates accuracy and sets trial_type for opOnlySpan task
-  - `apply_cuedts_condition_mappings()`: Applies condition mappings for cuedTS task based on trial_id
+  - `extract_cue_letter_from_image_filename()`: Parses HTML content to extract letter from image filenames (e.g., `lowercase_A.png` → `a`, `uppercase_B.png` → `B`)
+  - `calculate_stop_accuracy()`: Returns accuracy score (1.0/0.0) only for stop trials, sets `'n/a'` for go trials in stopSignal task
+  - `calculate_go_accuracy()`: Returns accuracy score (1.0/0.0) only for go trials, sets `'n/a'` for stop trials in stopSignal task
+  - `calculate_trial_type_stopSignal()`: Maps condition + correctness to trial types (e.g., `condition='go'` + `correct_trial=1.0` → `'go_success'`)
+  - `calculate_go_nogo_condition()`: Maps condition + correctness to conditions (e.g., `condition='nogo'` + `correct_trial=0.0` → `'nogo_failure'`)
+  - `calculate_stop_signal_condition()`: Maps trial types back to basic conditions (e.g., `'stop_success'`/`'stop_failure'` → `'stop'`)
+  - `calculate_nback_letter_to_match()`: Implements n-back working memory logic by finding letter from N trials back in history (1-back or 2-back)
+  - `calculate_opspan_trial_type()`: Maps `trial_id` values to BIDS event types (`'test_stim'` → `'span_encoding'`, `'test_trial'` → `'span_recall'`)
+  - `calculate_oponlyspan_accuracy_and_trial_type()`: Compares `correct_response` vs `response` for accuracy, sets trial types for operation span
+  - `apply_cuedts_condition_mappings()`: Handles cue/task condition logic by setting appropriate columns to `'n/a'` based on trial types in cued task switching
 
 - **`span_manipulators.py`**: Span task data manipulation
-  - `unfurl_and_align_span_recall_events()`: Main function for processing span task data
-  - `process_opspan_data()`: Specific processing for operation span
-  - `process_simplespan_data()`: Specific processing for simple span
+  - `process_span_data()`: **Unified span data processing** - Transforms compressed span task data into individual event rows:
+    - Converts list columns stored as strings (e.g., `[100, 500, 900]`) into separate rows for each timestamp/response
+    - Maintains correspondence between related lists (e.g., `timestamp[i]` aligns with `response[i]` and `cell_order[i]`)
+    - Handles different response types (valid_responses, duplicate_responses, extra_responses) with proper column mapping
+    - Processes `moving_through_grid_timestamps` and `valid_responses_timestamps` to create `response_time` values
+    - Maps `cell_order_through_grid` to `cell_movement` for each expanded row
+    - Sets `valid_cell_selection`, `invalid_cell_selection` based on response type
+    - Groups consecutive `test_trial` rows and sorts each cluster by `response_time`
+    - Sets `trial_type` as `span_encoding` for `test_stim` and `span_recall` for `test_trial` rows
+    - Computes accuracy by comparing `valid_cell_selection` vs `correct_cell` (ignoring invalid selections; they get acc = "n/a")
 
 #### `utils/` (Utility Functions)
 - **`config.py`**: Configuration management
   - `load_config()`: Loads YAML configuration files
-  - `load_default_config()`: Loads built-in default configuration
+  - `load_default_config()`: Loads built-in default configuration 
 
 - **`data_loader.py`**: Data loading utilities
   - `load_csv_as_dataframe()`: Loads CSV files as pandas DataFrame
@@ -114,8 +123,10 @@ rdoc_fmri_events/
 
 #### Primary Normalization: 
 
-##### (1) `_normalize_onsets_to_trigger_start(event_df, output_path)`
+##### (1) `_normalize_onsets_to_trigger_start(event_df, output_path, float_precision=5)`
+
 **Location**: `EventFileProcessor.create_event_file()` → Line 265
+
 **Purpose**: Main onset normalization function that handles the core timing transformation for all tasks
 
 **What it does**:
@@ -123,6 +134,7 @@ rdoc_fmri_events/
 2. **Reference Point Identification**: Locates the `fmri_wait_block_initial` marker to establish the timing reference
 3. **Data Filtering**: Removes all events that occurred before the `fmri_wait_block_trigger_start` marker
 4. **Normalization Formula**: Applies `onset[i] = (time_elapsed[i-1] - initial_onset_time)` to set trigger_start at 0.0 seconds
+5. **Precision Control**: Uses configurable `float_precision` parameter for rounding onset values
 
 **Critical Requirements**:
 - File must contain `fmri_wait_block_initial` marker (files without this are skipped)
@@ -130,8 +142,10 @@ rdoc_fmri_events/
 
 #### Sequence Recalculation (only applied to span_recall events for simpleSpan and opSpan)
 
-##### (1) `_recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, onset_calculation_type)`
+##### (1) `_recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, task_name, float_precision=5)`
+
 **Location**: Called from `create_event_file()` for span tasks (Lines 292-294 for opSpan, 381-383 for simpleSpan)
+
 **Purpose**: Recalculates onset timing within span task sequences using response time data
 
 **What it does**:
@@ -145,7 +159,9 @@ rdoc_fmri_events/
 - Subsequent rows: `onset[i] = onset[i-1] + (response_time[i] - response_time[i-1])`
 
 ##### (2) `_find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
+
 **Location**: Called by span task processing logic (Lines 289, 378)
+
 **Purpose**: Identifies consecutive rows that match a specific condition for sequence-based processing
 
 **What it does**:
@@ -208,8 +224,9 @@ The package follows a structured pipeline for processing RDOC fMRI data:
 
 ### 6. Span Task Processing (`data_processing/span_manipulators.py`)
 - Special handling for span tasks (operation span and simple span)
+- **Unified Processing**: Both opSpan and simpleSpan use the same core logic via `process_span_data()` function
 - Unfurls timestamp and cell movement/selection lists into multiple rows to give each event its own row
-- Calculates accuracy based on valid/invalid cell selections and correct responses
+- **Unified Accuracy Calculation**: Both tasks use opSpan's simpler approach (ignores `invalid_cell_selection`, only considers `valid_cell_selection` vs `correct_cell`)
 
 ### 7. Output Generation
 - Creates TSV event files in BIDS-compliant format
@@ -345,7 +362,7 @@ output_settings:
   file_format: tsv
   separator: "\t"
   include_header: true
-  float_precision: 3
+  float_precision: 6
 ```
 
 #### `download_config.yaml` (Download Configuration)
