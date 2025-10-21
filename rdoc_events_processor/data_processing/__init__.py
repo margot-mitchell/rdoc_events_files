@@ -14,8 +14,6 @@ from .calculators import (
 )
 from .span_manipulators import (
     process_span_data,
-    process_opspan_data,
-    process_simplespan_data,
     _calculate_unified_accuracy,
     find_consecutive_sequences,
     recalculate_onsets_for_sequences,
@@ -33,8 +31,6 @@ __all__ = [
     "calculate_nback_letter_to_match",
     "apply_cuedts_condition_mappings",
     "process_span_data",
-    "process_opspan_data",
-    "process_simplespan_data",
     "_calculate_unified_accuracy",
     "find_consecutive_sequences",
     "recalculate_onsets_for_sequences",

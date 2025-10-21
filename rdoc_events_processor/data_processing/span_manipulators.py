@@ -485,30 +485,6 @@ def recalculate_onsets_for_sequences(event_df, sequences_found, response_time_co
     return rows_modified
 
 
-def process_opspan_data(df):
-    """
-    Process opSpan data by calling the unified span data processing function.
-    
-    Args:
-        df (pd.DataFrame): Input opSpan dataframe
-        
-    Returns:
-        pd.DataFrame: Processed dataframe with expanded rows
-    """
-    return process_span_data(df, 'opSpan')
-
-
-def process_simplespan_data(df):
-    """
-    Process simpleSpan data by calling the unified span data processing function.
-    
-    Args:
-        df (pd.DataFrame): Input simpleSpan dataframe
-        
-    Returns:
-        pd.DataFrame: Processed dataframe with expanded rows
-    """
-    return process_span_data(df, 'simpleSpan')
 
 
 def _sort_test_trial_clusters_by_response_time(result_df):

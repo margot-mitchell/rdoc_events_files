@@ -79,13 +79,13 @@ rdoc_fmri_events/
 
 - **`span_manipulators.py`**: Span task data manipulation and onset recalculation (simpleSpan and opSpan)
   - `process_span_data()`: **1st** - Transforms compressed span task data into individual event rows:
-    - Converts list columns stored as strings (e.g., `valid_response_timestamps` = `[100, 500, 900]` and `valid_respones` = `[1, 2, 3]`) into separate rows for each timestamp/response
+    - Converts list columns stored as strings (e.g., `valid_response_timestamps` = `[100, 500, 900]` and `valid_respones` = `[1, 2, 3]`) into separate rows for each timestamp/response (via utility functuon `parse_list_string`)
     - Maintains correspondence between related lists (e.g., `timestamp[i]` aligns with `response[i]` and `cell_order[i]`)
     - Processes `moving_through_grid_timestamps` and `valid_responses_timestamps` to create `response_time` values
     - Maps `cell_order_through_grid` to `cell_movement` for each expanded row
     - Sets `valid_cell_selection`, `invalid_cell_selection` based on response type (`valid_responses`, `duplicate_responses`, `extra_responses`) where "invalid" includes both duplicate and extra responses
-    - Sorts consecutive `test_trial` rows by `response_time` within clusters
-    - Computes accuracy by comparing `valid_cell_selection` vs `correct_cell` (ignoring invalid selections; they get acc = "n/a")
+    - Sorts consecutive `test_trial` rows by `response_time` within clusters (via utility function `_sort_test_trial_clusters_by_response_time`)
+    - Computes accuracy by comparing `valid_cell_selection` vs `correct_cell` and ignoring invalid selections; they get acc = "n/a" (via utility function `_calculate_unified_accuracy`)
   - `calculate_opspan_trial_type()`: **2nd** - Maps `trial_id` values to event types (`'test_stim'` → `'span_encoding'`, `'test_trial'` → `'span_recall'`, `'test_inter-stimulus'` → `'operation'`, `'test_ITI'` → `'n/a'`)
   - `calculate_simplespan_trial_type()`: **2nd** - Maps `trial_id` values to event types (`'test_stim'` → `'span_encoding'`, `'test_trial'` → `'span_recall'`, all others → `'n/a'`)
   - `find_consecutive_sequences()`: **3rd** - Identifies consecutive test_trial rows for sequence-based processing
@@ -219,10 +219,16 @@ The package follows a structured pipeline for processing RDOC fMRI data:
 - Processes stimulus extraction and condition classification
 
 ### 6. Span Task Processing (`data_processing/span_manipulators.py`)
-- Special handling for span tasks (operation span and simple span)
 - **Unified Processing**: Both opSpan and simpleSpan use the same core logic via `process_span_data()` function
-- Unfurls timestamp and cell movement/selection lists into multiple rows to give each event its own row
-- **Unified Accuracy Calculation**: Ignores `invalid_cell_selection`, only considers whether `valid_cell_selection` = `correct_cell`
+- **Data Expansion**: Converts compressed span task data into individual event rows by unfurling timestamp and cell movement/selection lists
+- **List Processing**: Parses string representations of lists (e.g., `valid_response_timestamps` = `[100, 500, 900]`) into separate rows for each timestamp/response
+- **Response Mapping**: Maintains correspondence between related lists (e.g., `timestamp[i]` aligns with `response[i]` and `cell_order[i]`)
+- **Time Calculation**: Processes `moving_through_grid_timestamps` and `valid_responses_timestamps` to create `response_time` values
+- **Cell Movement Mapping**: Maps `cell_order_through_grid` to `cell_movement` for each expanded row
+- **Response Classification**: Sets `valid_cell_selection`, `invalid_cell_selection` based on response type (`valid_responses`, `duplicate_responses`, `extra_responses`)
+- **Sorting**: Sorts consecutive `test_trial` rows by `response_time` within clusters
+- **Trial Type Mapping**: Maps `trial_id` values to event types (`'test_stim'` → `'span_encoding'`, `'test_trial'` → `'span_recall'`, etc.)
+- **Unified Accuracy Calculation**: Compares `valid_cell_selection` vs `correct_cell` (ignores invalid selections; they get acc = "n/a")
 - **Onset Recalculation**: Contains `find_consecutive_sequences()` and `recalculate_onsets_for_sequences()` functions for span-specific timing adjustments
 
 ### 7. Output Generation
