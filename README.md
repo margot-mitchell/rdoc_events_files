@@ -35,8 +35,7 @@ rdoc_fmri_events/
 │   ├── test_calculators.py         
 │   ├── test_event_structure.py     
 │   ├── test_processor_error_handling.py
-│   ├── test_span_manipulations.py  
-│   └── test_span_tasks.py.disabled
+│   └── test_span_manipulations.py  
 ├── setup.py                        # Package installation setup
 ├── requirements.txt                # Python dependencies
 ├── README.md                       # This documentation
