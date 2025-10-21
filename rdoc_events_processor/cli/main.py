@@ -6,7 +6,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from ..utils.config import load_config, load_default_config, get_config_path
+from ..utils.config import load_config, load_default_config
 from ..data_processing import EventFileProcessor
 
 logger = logging.getLogger(__name__)

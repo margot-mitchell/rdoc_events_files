@@ -33,47 +33,6 @@ def parse_list_string(list_str):
         return []
 
 
-def _clear_list_columns_and_set_defaults(new_row, first_row_added):
-    """
-    Clear list columns and set default values for span processing.
-    
-    Args:
-        new_row (dict): Row dictionary to modify
-        first_row_added (bool): Whether first row has been added for this input row
-        
-    Returns:
-        bool: Whether this should be considered the first row added
-    """
-    # Clear list columns
-    list_columns = [
-        'moving_through_grid_timestamps', 'cell_order_through_grid',
-        'valid_responses_timestamps', 'duplicate_responses_timestamps', 
-        'extra_responses_timestamps', 'valid_responses', 'duplicate_responses',
-        'extra_responses', 'correct_cell_order'
-    ]
-    
-    for col in list_columns:
-        new_row[col] = ''
-    
-    # Set response to n/a for all rows except the very first expanded row
-    if first_row_added:
-        new_row['response'] = 'n/a'
-    
-    return True
-
-
-def _set_non_relevant_columns_to_na(new_row, column_mapping):
-    """
-    Set specified columns to 'n/a' for non-relevant row types.
-    
-    Args:
-        new_row (dict): Row dictionary to modify
-        column_mapping (dict): Dict mapping column names to values to set
-    """
-    for col, value in column_mapping.items():
-        new_row[col] = value
-
-
 def process_opspan_data(df):
     """
     Process opSpan data according to specific expansion rules:
@@ -741,6 +700,54 @@ def process_simplespan_data(df):
         other_mask = (~result_df['trial_id'].isin(['test_stim', 'test_trial']))
         result_df.loc[other_mask, 'trial_type'] = 'n/a'
         logger.info(f"simpleSpan: set trial_type based on trial_id - span_encoding for test_stim, span_recall for test_trial, n/a for others")
+    
+    # Calculate accuracy based on valid_cell_selection, invalid_cell_selection, and correct_cell
+    if 'valid_cell_selection' in result_df.columns and 'invalid_cell_selection' in result_df.columns and 'correct_cell' in result_df.columns:
+        # Initialize acc column if it doesn't exist
+        if 'acc' not in result_df.columns:
+            result_df['acc'] = 'n/a'
+        
+        accuracy_values = []
+        valid_cell_selection = result_df.get('valid_cell_selection', pd.Series())
+        invalid_cell_selection = result_df.get('invalid_cell_selection', pd.Series())
+        correct_cell = result_df.get('correct_cell', pd.Series())
+        
+        for idx in range(len(result_df)):
+            valid_sel = str(valid_cell_selection.iloc[idx]) if idx < len(valid_cell_selection) else 'n/a'
+            invalid_sel = str(invalid_cell_selection.iloc[idx]) if idx < len(invalid_cell_selection) else 'n/a'
+            correct = str(correct_cell.iloc[idx]) if idx < len(correct_cell) else 'n/a'
+            
+            # Normalize values (handle NaN, empty strings, etc.)
+            if valid_sel in ['nan', '', 'None']:
+                valid_sel = 'n/a'
+            if invalid_sel in ['nan', '', 'None']:
+                invalid_sel = 'n/a'
+            if correct in ['nan', '', 'None']:
+                correct = 'n/a'
+            
+            # Calculate accuracy based on the rules:
+            # acc = 1.0 if valid_cell_selection == correct_cell and both are not 'n/a'
+            # acc = 0.0 if: (correct != 'n/a' and valid_cell_selection != correct_cell) OR
+            #      (either valid_cell_selection or invalid_cell_selection != 'n/a' AND
+            #       both valid_cell_selection != correct_cell AND invalid_cell_selection != correct_cell)
+            # acc = 'n/a' otherwise (including when invalid_cell_selection == correct_cell)
+            
+            if valid_sel == correct and valid_sel != 'n/a':
+                accuracy_values.append(1.0)
+            elif (correct != 'n/a' and correct != valid_sel) or \
+                 ((valid_sel != 'n/a' or invalid_sel != 'n/a') and 
+                  valid_sel != correct and invalid_sel != correct):
+                accuracy_values.append(0.0)
+            else:
+                accuracy_values.append('n/a')
+        
+        result_df['acc'] = accuracy_values
+        
+        # Log accuracy calculation results
+        acc_1_count = len([acc for acc in accuracy_values if acc == 1.0])
+        acc_0_count = len([acc for acc in accuracy_values if acc == 0.0])
+        acc_na_count = len([acc for acc in accuracy_values if acc == 'n/a'])
+        logger.info(f"simpleSpan: accuracy calculated - {acc_1_count} correct (1.0), {acc_0_count} incorrect (0.0), {acc_na_count} n/a")
     
     logger.info(f"simpleSpan: processed {len(result_df)} rows from {len(df)} input rows")
     

@@ -1,10 +1,10 @@
 # Configuration file for event file column mapping
-# This file defines which columns from the BIDS data to include in the event files
+# This file defines which columns from the dropbox data to include in the event files
 
-# Columns to include from the original BIDS data (applied to ALL tasks)
-# Format: "bids_column_name": "event_file_column_name"
-# Leave event_file_column_name empty to keep the same name as bids_column_name
-bids_columns:
+# Columns to include from the original data (these columns exist in input data for all tasks and are used in some way for all events files)
+# Format: "input_column_name": "event_file_column_name"
+# Leave event_file_column_name empty to keep the same name as input_column_name
+input_columns:
   # DIRECT MAPPING FOR ALL TASKS: No manipulation beyond initial mapping
   "trial_id": "trial_id"
   # PROCESSED FOR ALL TASKS: 
@@ -104,7 +104,7 @@ task_specific_columns:
     "response": "response"
     "grid_symmetry": "grid_symmetry"
     "spatial_location": "spatial_location"
-    "condition": "trial_type" # manipulated to set "span" for span trials (dropbox has "operation" for ALL rows)
+    "condition": "trial_type" # manipulated (dropbox has "operation" for ALL rows. Converts unfurled test_trial rows to "span_recall", "test_inter-stimulus" to "operation", and "test_stim" to "span_encoding")
     # Note: moving_through_grid_timestamps, cell_order_through_grid, valid_responses, duplicate_responses, 
     # extra_responses, valid_responses_timestamps, duplicate_responses_timestamps, extra_responses_timestamps, 
     # correct_cell_order, and correct_navigation_response are used for processing but may not exist in input files

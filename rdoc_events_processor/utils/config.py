@@ -48,19 +48,3 @@ def load_default_config():
         return None
 
 
-def get_config_path(config_path=None):
-    """
-    Get the configuration file path, using default if not specified.
-    
-    Args:
-        config_path (str, optional): Custom config path
-        
-    Returns:
-        str: Path to configuration file
-    """
-    if config_path is None:
-        return pkg_resources.resource_filename(
-            'rdoc_events_processor', 
-            'configs/event_columns_config.yaml'
-        )
-    return config_path

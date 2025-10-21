@@ -108,7 +108,7 @@ def simplespan_trial_data():
 def test_config():
     """Test configuration for the processor."""
     return {
-        'bids_columns': {
+        'input_columns': {
             'time_elapsed': 'onset',
             'stimulus_duration': 'duration',
             'trial_id': 'trial_id',

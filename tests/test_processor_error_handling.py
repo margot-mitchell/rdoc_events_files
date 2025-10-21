@@ -18,7 +18,7 @@ class TestProcessorErrorHandling:
         """Test that processor properly handles missing required columns."""
         # Create processor with test config
         config = {
-            'bids_columns': {
+            'input_columns': {
                 'time_elapsed': 'onset',
                 'trial_id': 'trial_id'
             },
@@ -49,7 +49,7 @@ class TestProcessorErrorHandling:
     def test_missing_fmri_wait_block_initial_handling(self):
         """Test handling when fmri_wait_block_initial marker is missing."""
         config = {
-            'bids_columns': {
+            'input_columns': {
                 'time_elapsed': 'onset',
                 'trial_id': 'trial_id'
             },
@@ -79,7 +79,7 @@ class TestProcessorErrorHandling:
     def test_csv_loading_error_handling(self):
         """Test handling of CSV loading errors."""
         config = {
-            'bids_columns': {'time_elapsed': 'onset'},
+            'input_columns': {'time_elapsed': 'onset'},
             'task_specific_columns': {},
             'exclude_columns_by_task': {},
             'output_settings': {}
@@ -107,7 +107,7 @@ class TestProcessorErrorHandling:
     def test_statistics_tracking_accuracy(self):
         """Test that statistics tracking accurately counts files processed."""
         config = {
-            'bids_columns': {'time_elapsed': 'onset', 'trial_id': 'trial_id'},
+            'input_columns': {'time_elapsed': 'onset', 'trial_id': 'trial_id'},
             'task_specific_columns': {},
             'exclude_columns_by_task': {},
             'output_settings': {}
@@ -143,7 +143,7 @@ class TestConfigurationValidation:
         """Test behavior when configuration sections are missing."""
         # Test with minimal config
         minimal_config = {
-            'bids_columns': {'time_elapsed': 'onset'},
+            'input_columns': {'time_elapsed': 'onset'},
             'task_specific_columns': {},
             'output_settings': {}
         }
@@ -157,7 +157,7 @@ class TestConfigurationValidation:
     def test_task_mapping_correctness(self):
         """Test that task mapping works correctly."""
         config = {
-            'bids_columns': {'time_elapsed': 'onset'},
+            'input_columns': {'time_elapsed': 'onset'},
             'task_specific_columns': {},
             'output_settings': {}
         }
@@ -172,7 +172,7 @@ class TestConfigurationValidation:
     def test_column_mapping_with_missing_optional_columns(self):
         """Test column mapping when optional columns are missing."""
         config = {
-            'bids_columns': {
+            'input_columns': {
                 'time_elapsed': 'onset',
                 'trial_id': 'trial_id',
                 'missing_optional': 'missing_col'
@@ -215,7 +215,7 @@ class TestTaskIntegrationTests:
     def test_cuedts_integration_basic_structure(self):
         """Basic integration test for cuedTS task structure."""
         config = {
-            'bids_columns': {
+            'input_columns': {
                 'time_elapsed': 'onset',
                 'trial_id': 'trial_id',
                 'rt': 'response_time'
@@ -262,7 +262,7 @@ class TestTaskIntegrationTests:
     def test_missing_task_specific_columns_handling(self):
         """Test handling when task-specific columns are missing."""
         config = {
-            'bids_columns': {
+            'input_columns': {
                 'time_elapsed': 'onset',
                 'trial_id': 'trial_id'
             },

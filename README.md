@@ -1,6 +1,6 @@
 # RDOC Events Processor
 
-A Python package for downloading and processing behavioral data in csv format and BIDS structure from the PoldrackLab Dropbox account to create event files for RDOC fMRI. 
+A Python package for downloading and processing behavioral data in csv format and BIDS structure from the PoldrackLab Dropbox account to create event files for RDoC fMRI. 
 
 ## Package Structure
 
@@ -14,28 +14,27 @@ rdoc_fmri_events/
 │   ├── __init__.py                 # Package initialization & API exports
 │   ├── cli/                        # Command-line interfaces
 │   │   ├── __init__.py
-│   │   ├── main.py                 # Main event processing CLI
-│   │   └── download.py             # Dropbox download CLI
+│   │   ├── main.py                 
+│   │   └── download.py          
 │   ├── configs/                    # Configuration files
-│   │   ├── event_columns_config.yaml    # Column mappings & output settings
-│   │   └── download_config.yaml         # Download & rclone settings
+│   │   ├── event_columns_config.yaml    # Specifies which columns from the input data from dropbox get mapped to which columns in the events files
+│   │   └── download_config.yaml         # Download & rclone path settings
 │   ├── data_processing/            # Core processing logic
 │   │   ├── __init__.py
 │   │   ├── processor.py            # Main EventFileProcessor class
 │   │   ├── calculators.py          # Task-specific calculation functions
-│   │   └── span_manipulators.py    # Span task data manipulation
+│   │   └── span_manipulators.py    # Span-specific manipulation
 │   └── utils/                      # Utility functions
 │       ├── __init__.py
-│       ├── config.py               # Configuration management
-│       ├── data_loader.py          # CSV data loading
-│       └── column_utils.py         # Column manipulation utilities
+│       ├── config.py                   
+│       └── data_loader.py          
 ├── tests/                          # Test suite
 │   ├── __init__.py
-│   ├── conftest.py                 # Pytest configuration
-│   ├── test_bids_compliance.py     # BIDS format compliance tests
-│   ├── test_calculators.py         # Calculator function tests
-│   ├── test_event_structure.py     # Event structure tests
-│   └── test_span_manipulations.py  # Span manipulation tests
+│   ├── conftest.py                 
+│   ├── test_bids_compliance.py     
+│   ├── test_calculators.py         
+│   ├── test_event_structure.py     
+│   └── test_span_manipulations.py  s
 ├── setup.py                        # Package installation setup
 ├── requirements.txt                # Python dependencies
 ├── README.md                       # This documentation
@@ -89,17 +88,13 @@ rdoc_fmri_events/
 - **`config.py`**: Configuration management
   - `load_config()`: Loads YAML configuration files
   - `load_default_config()`: Loads built-in default configuration
-  - `get_config_path()`: Gets path to configuration files
 
 - **`data_loader.py`**: Data loading utilities
   - `load_csv_as_dataframe()`: Loads CSV files as pandas DataFrame
 
-- **`column_utils.py`**: Column manipulation utilities
-  - `reorder_columns_to_standard_bids_event_format()`: Reorders DataFrame columns to standard BIDS event format
-
 #### `configs/` (Configuration Files)
 - **`event_columns_config.yaml`**: Column mapping configuration
-  - `bids_columns`: Global column mappings for all tasks
+  - `input_columns`: Global column mappings for all tasks
   - `task_specific_columns`: Task-specific column mappings
   - `output_settings`: Output format specifications
 
@@ -111,19 +106,17 @@ rdoc_fmri_events/
 
 ## Onset Calculation
 
-The package implements sophisticated onset timing calculations through the `EventFileProcessor` class. Onset calculations occur in multiple stages with different functions handling specific aspects of the timing transformation.
-
-### Overview of Onset Processing Flow
-
 1. **Initial Column Mapping**: Raw `time_elapsed` data (milliseconds) is mapped to the `onset` column
 2. **Primary Normalization**: Times are converted to seconds and normalized to a reference point
 3. **Sequence Recalculation**: Span tasks undergo additional timing adjustments based on response times
 
 ### Key Functions and Their Roles
 
-#### `_normalize_onsets_to_trigger_start(event_df, output_path)`
+#### Primary Normalization: 
+
+##### (1) `_normalize_onsets_to_trigger_start(event_df, output_path)`
 **Location**: `EventFileProcessor.create_event_file()` → Line 265
-**Purpose**: Main onset normalization function that handles the core timing transformation
+**Purpose**: Main onset normalization function that handles the core timing transformation for all tasks
 
 **What it does**:
 1. **Milliseconds to Seconds Conversion**: Converts `onset` values from milliseconds to seconds (`/ 1000.0`)
@@ -133,33 +126,32 @@ The package implements sophisticated onset timing calculations through the `Even
 
 **Critical Requirements**:
 - File must contain `fmri_wait_block_initial` marker (files without this are skipped)
-- File must contain `fmri_wait_block_trigger_start` marker (files without this are skipped) 
+- File must contain `fmri_wait_block_trigger_start` marker (files without this are skipped)
 
-#### `_recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, onset_calculation_type)`
+#### Sequence Recalculation (only applied to span_recall events for simpleSpan and opSpan)
+
+##### (2) `_recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, onset_calculation_type)`
 **Location**: Called from `create_event_file()` for span tasks (Lines 292-294 for opSpan, 381-383 for simpleSpan)
 **Purpose**: Recalculates onset timing within span task sequences using response time data
 
 **What it does**:
-1. **Sequence Detection**: Identifies consecutive sequences of related events (span_recall for opSpan, test_trial clusters for simpleSpan)
+1. **Sequence Detection**: Identifies consecutive sequences of `trial_id == 'test_trial'` rows for both opSpan and simpleSpan (which become `trial_type == 'span_recall'`)
 2. **Response Time Integration**: Uses `response_time` data to adjust onset timing within sequences
 3. **Task-Specific Logic**: Implements identical calculation formulas for both opSpan and simpleSpan tasks:
 
 **Logic for unfurling opSpan and simpleSpan span_recall events** (identical):
-- First row in sequence: Keep its normalized onset unchanged (don't modify)
+- First row in sequence: Keep its normalized onset unchanged
 - Second row in sequence: `onset[i] = onset[i-1] + response_time[i-1]`
 - Subsequent rows: `onset[i] = onset[i-1] + (response_time[i] - response_time[i-1])`
 
-#### `_find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
+##### (3) `_find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
 **Location**: Called by span task processing logic (Lines 289, 378)
 **Purpose**: Identifies consecutive rows that match a specific condition for sequence-based processing
 
 **What it does**:
 - Finds contiguous blocks of rows matching a boolean condition
 - Returns list of `(start_index, end_index)` tuples for each sequence
-- **Both opSpan and simpleSpan**: Use unified sequence detection with `min_sequence_length=2`
-- **Both tasks**: Look for `trial_id == 'test_trial'` rows (which become `trial_type == 'span_recall'`)
-- **Algorithm**: Both tasks preserve the first row unchanged, but use different formulas for subsequent rows
-
+- **Both opSpan and simpleSpan**: Detect sequences with `min_sequence_length=2` of `trial_id == 'test_trial'` rows (which become `trial_type == 'span_recall'`)
 
 ### Processing Order and Dependencies
 
@@ -169,22 +161,9 @@ The onset calculation follows this strict sequence:
 2. **Primary Normalization** (Line 265): `_normalize_onsets_to_trigger_start()` - converts to seconds and normalizes to trigger
 3. **Span Task Recalculation** (Lines 292-294, 381-383): `_recalculate_onsets_for_sequences()` - applies sequence-specific timing adjustments
 
-**Important**: The primary normalization MUST occur before span task recalculation because:
-- It establishes the baseline timing (trigger_start = 0.0s)
-- It converts all timing data to seconds consistently
-- It filters out pre-trigger events that shouldn't be included in span calculations
-
-### Error Handling and Validation
-
-- **Missing Markers**: Files without either `fmri_wait_block_initial` or `fmri_wait_block_trigger_start` are skipped with appropriate logging
-  - Missing `fmri_wait_block_initial`: Tracked as "Missing fmri_wait_block_initial marker"
-  - Missing `fmri_wait_block_trigger_start`: Tracked as "Processing error: No 'fmri_wait_block_trigger_start' trial_id found..."
-- **Data Type Safety**: All numeric conversions use `pd.to_numeric(..., errors='coerce')` for robustness
-- **Precision**: Final onset values are rounded to 5 decimal places for consistency
-
 ## Supported Tasks
 
-The package handles various RDOC tasks including:
+The package handles specific tasks used in the RDoC fMRI project:
 - Go/No-Go
 - AX-CPT
 - Spatial Task Switching
@@ -214,14 +193,13 @@ The package follows a structured pipeline for processing RDOC fMRI data:
 
 ### 3. Configuration Management (`utils/config.py`)
 - Loads YAML configuration files for column mappings
-- Provides default configurations for immediate use
 - Manages task-specific and global column mappings
 
 ### 4. Data Processing (`data_processing/processor.py`)
 - Main `EventFileProcessor` class orchestrates the entire process
-- Maps BIDS column names to event file column names
+- Maps input column names to event file column names
 - Handles task-specific processing logic
-- Creates properly formatted event files
+- Formatting
 
 ### 5. Task-Specific Calculations (`data_processing/calculators.py`)
 - Implements calculations specific to each task type
@@ -229,15 +207,11 @@ The package follows a structured pipeline for processing RDOC fMRI data:
 - Processes stimulus extraction and condition classification
 
 ### 6. Span Task Processing (`data_processing/span_manipulators.py`)
-- Special handling for span tasks (operation span, simple span, etc.)
-- Expands list data into multiple rows for proper event file format
-- Handles complex data structures specific to working memory tasks
+- Special handling for span tasks (operation span and simple span)
+- Unfurls timestamp and cell movement/selection lists into multiple rows to give each event its own row
+- Calculates accuracy based on valid/invalid cell selections and correct responses
 
-### 7. Column Management (`utils/column_utils.py`)
-- Reorders columns according to BIDS standards
-- Ensures consistent column ordering across all event files
-
-### 8. Output Generation
+### 7. Output Generation
 - Creates TSV event files in BIDS-compliant format
 - Maintains proper directory structure (sub-XX/ses-XX/)
 - Applies consistent naming conventions
@@ -353,7 +327,7 @@ The package uses YAML configuration files to define column mappings and processi
 Defines column mappings and output settings for event file creation:
 
 ```yaml
-bids_columns:
+input_columns:
   "time_elapsed": "onset"
   "stimulus_duration": "duration"
   "trial_id": "trial_id"
@@ -435,8 +409,6 @@ Event files follow a consistent column ordering:
    - `trial_type` - Trial condition
 
 2. **All other columns** - Sorted alphabetically
-
-This ensures consistent structure across all event files and makes them easier to work with programmatically.
 
 ## Development
 
