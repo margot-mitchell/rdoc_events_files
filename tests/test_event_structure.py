@@ -138,8 +138,8 @@ class TestEventStructure:
                     f"Task {task_name} has inconsistent data types in: {inconsistent_files}"
                 )
     
-    def test_trigger_start_is_first_row_with_zero_onset(self):
-        """Test that the first row in event files has trial_id='fmri_wait_block_trigger_start' and onset=0.0."""
+    def test_trigger_end_is_first_row_with_zero_onset(self):
+        """Test that the first row in event files has trial_id='fmri_wait_block_trigger_end' and onset=0.0."""
         output_dir = Path("output")
         event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
         
@@ -158,8 +158,8 @@ class TestEventStructure:
             first_row = df.iloc[0]
             
             # Check if first row has correct trial_id and onset
-            if first_row.get('trial_id') != 'fmri_wait_block_trigger_start':
-                files_with_issues.append(f"{file_path}: First row trial_id is '{first_row.get('trial_id')}' not 'fmri_wait_block_trigger_start'")
+            if first_row.get('trial_id') != 'fmri_wait_block_trigger_end':
+                files_with_issues.append(f"{file_path}: First row trial_id is '{first_row.get('trial_id')}' not 'fmri_wait_block_trigger_end'")
             
             if first_row.get('onset') != 0.0:
                 files_with_issues.append(f"{file_path}: First row onset is {first_row.get('onset')} not 0.0")
@@ -168,7 +168,7 @@ class TestEventStructure:
             error_msg = "Event files with incorrect first row:\n"
             for issue in files_with_issues:
                 error_msg += f"  {issue}\n"
-            error_msg += "\nFirst row should have trial_id='fmri_wait_block_trigger_start' and onset=0.0"
+            error_msg += "\nFirst row should have trial_id='fmri_wait_block_trigger_end' and onset=0.0"
             pytest.fail(error_msg)
     
     def test_trigger_duration_preservation(self):
@@ -420,4 +420,121 @@ class TestEventStructure:
                 error_msg += f"  ... and {total_files - 20} more files\n"
             error_msg += "\nDuration should represent time until next event (tolerance: ±500ms)"
             pytest.fail(error_msg)
+    
+    def test_trigger_end_first_row_onset_difference(self):
+        """
+        Test that the first row is fmri_wait_block_trigger_end and that the difference 
+        in onset from first row to second row equals the difference in time_elapsed 
+        between those rows in the original input data.
+        """
+        output_dir = Path("output")
+        event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
+        
+        if not event_files:
+            pytest.skip("No event files found in output directory")
+        
+        dropbox_bids_dir = Path("dropbox_bids")
+        if not dropbox_bids_dir.exists():
+            pytest.skip("dropbox_bids directory not found")
+        
+        files_with_issues = []
+        files_checked = 0
+        files_skipped = 0
+        
+        for output_file in event_files[:20]:  # Test first 20 files to avoid timeout
+            try:
+                # Read output file
+                output_df = pd.read_csv(output_file, sep='\t', keep_default_na=False)
+                
+                if len(output_df) < 2:
+                    files_skipped += 1
+                    continue
+                
+                # Check that first row is trigger_end
+                first_row = output_df.iloc[0]
+                if first_row.get('trial_id') != 'fmri_wait_block_trigger_end':
+                    files_with_issues.append({
+                        'file': str(output_file),
+                        'issue': f"First row trial_id is '{first_row.get('trial_id')}' not 'fmri_wait_block_trigger_end'"
+                    })
+                    continue
+                
+                # Get onset values for first and second rows
+                onset_first = pd.to_numeric(first_row.get('onset'), errors='coerce')
+                second_row = output_df.iloc[1]
+                onset_second = pd.to_numeric(second_row.get('onset'), errors='coerce')
+                
+                if pd.isna(onset_first) or pd.isna(onset_second):
+                    files_skipped += 1
+                    continue
+                
+                # Calculate onset difference
+                onset_diff = onset_second - onset_first
+                
+                # Find corresponding input CSV file
+                from tests.test_trigger_timing_difference import find_corresponding_input_csv
+                input_csv = find_corresponding_input_csv(output_file, dropbox_bids_dir)
+                
+                if input_csv is None or not input_csv.exists():
+                    files_skipped += 1
+                    continue
+                
+                # Read input CSV
+                input_df = pd.read_csv(input_csv, keep_default_na=False)
+                
+                # Find trigger_start and trigger_end in input
+                trigger_start_mask = input_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
+                trigger_end_mask = input_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_end'
+                
+                if not trigger_start_mask.any() or not trigger_end_mask.any():
+                    files_skipped += 1
+                    continue
+                
+                trigger_start_idx = input_df[trigger_start_mask].index[0]
+                trigger_end_idx = input_df[trigger_end_mask].index[0]
+                
+                # Get time_elapsed values from input (in milliseconds)
+                time_elapsed_trigger_start = pd.to_numeric(
+                    input_df.loc[trigger_start_idx, 'time_elapsed'], errors='coerce'
+                )
+                time_elapsed_trigger_end = pd.to_numeric(
+                    input_df.loc[trigger_end_idx, 'time_elapsed'], errors='coerce'
+                )
+                
+                if pd.isna(time_elapsed_trigger_start) or pd.isna(time_elapsed_trigger_end):
+                    files_skipped += 1
+                    continue
+                
+                # Calculate expected time_elapsed difference in seconds
+                # According to the formula: onset[1] = time_elapsed[trigger_end] - normalization_reference
+                # where normalization_reference = time_elapsed[trigger_start]
+                # So onset[1] - onset[0] = time_elapsed[trigger_end] - time_elapsed[trigger_start]
+                time_elapsed_diff_seconds = (time_elapsed_trigger_end - time_elapsed_trigger_start) / 1000.0
+                
+                # Check if they match (with tolerance for floating point precision)
+                # Expected: onset[1] - onset[0] = time_elapsed[trigger_end] - time_elapsed[trigger_start]
+                tolerance = 0.001  # 1ms tolerance
+                if abs(onset_diff - time_elapsed_diff_seconds) > tolerance:
+                    files_with_issues.append({
+                        'file': str(output_file),
+                        'issue': f"Onset difference ({onset_diff:.6f}s) does not match expected time_elapsed difference ({time_elapsed_diff_seconds:.6f}s). Expected: time_elapsed[trigger_end] - time_elapsed[trigger_start]"
+                    })
+                else:
+                    files_checked += 1
+                    
+            except Exception as e:
+                files_with_issues.append({
+                    'file': str(output_file),
+                    'issue': f"Error processing file: {str(e)}"
+                })
+        
+        if files_with_issues:
+            error_msg = f"{len(files_with_issues)} file(s) with issues. First: {files_with_issues[0]['file']}\n"
+            for issue_info in files_with_issues:
+                error_msg += f"  {issue_info['file']}: {issue_info['issue']}\n"
+            error_msg += "\nFirst row should be fmri_wait_block_trigger_end, and onset difference should match time_elapsed difference"
+            pytest.fail(error_msg)
+        
+        if files_checked == 0:
+            pytest.skip("No files could be checked (missing input files or insufficient data)")
     

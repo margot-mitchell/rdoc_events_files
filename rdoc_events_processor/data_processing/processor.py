@@ -623,7 +623,13 @@ class EventFileProcessor:
             pd.DataFrame: DataFrame with standardized 'n/a' values
         """
         # Replace all empty/null values with "n/a"
-        event_df = event_df.fillna('n/a')
+        # Suppress FutureWarning about downcasting - we want to keep object dtype
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            event_df = event_df.fillna('n/a')
+        # Ensure we maintain object dtype to avoid downcasting issues
+        event_df = event_df.infer_objects(copy=False)
         # Also replace empty strings and whitespace-only strings with "n/a"
         event_df = event_df.replace('', 'n/a')
         event_df = event_df.replace(r'^\s*$', 'n/a', regex=True)
@@ -642,7 +648,7 @@ class EventFileProcessor:
         This function performs three main operations:
         1. Converts onset values from milliseconds to seconds
         2. Filters out events that occurred before the trigger_start marker
-        3. Recalculates onsets relative to trigger_start row: normalization_reference = time_elapsed[trigger_start] - rt[trigger_start]
+        3. Recalculates onsets relative to trigger_start row: normalization_reference = time_elapsed[trigger_start]
         
         Args:
             event_df (pd.DataFrame): Event dataframe with 'onset' column containing millisecond timestamps
@@ -674,11 +680,7 @@ class EventFileProcessor:
                          f"Skipping this file as it likely contains practice/prescan data.")
             return False, None
         
-        # Get initial time_elapsed BEFORE filtering (needed for normalization reference)
-        initial_idx = event_df[initial_row_mask].index[0]
-        initial_time_elapsed_seconds = onset_seconds.iloc[initial_idx]
-        
-        # STEP 2: Locate and filter to trigger_start marker
+        # STEP 2: Locate trigger_start marker and get normalization reference
         trigger_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
         
         if not trigger_row_mask.any():
@@ -687,53 +689,45 @@ class EventFileProcessor:
             
         trigger_idx = event_df[trigger_row_mask].index[0]
         
-        # Get trigger_start row data BEFORE filtering (need original rt value)
-        # Try to get rt from response_time column (mapped from rt) or directly from rt if available
-        rt_col = event_df.get('response_time', pd.Series())
-        if rt_col.empty or trigger_idx >= len(rt_col):
-            # Fallback to rt column if response_time not available
-            rt_col = event_df.get('rt', pd.Series())
+        # Calculate normalization reference: time_elapsed[fmri_wait_block_trigger_start] in seconds
+        normalization_reference = onset_seconds.iloc[trigger_idx]
         
-        # Get rt value for trigger_start row
-        if trigger_idx < len(rt_col):
-            trigger_rt_ms = pd.to_numeric(rt_col.iloc[trigger_idx], errors='coerce')
-            if pd.isna(trigger_rt_ms):
-                trigger_rt_ms = 0.0
-        else:
-            trigger_rt_ms = 0.0
-        
-        # Convert rt from milliseconds to seconds
-        trigger_rt_seconds = trigger_rt_ms / 1000.0
-        
-        # Calculate normalization reference: time_elapsed[initial] + rt[trigger_start]
-        normalization_reference = initial_time_elapsed_seconds + trigger_rt_seconds
-        
-        # Filter: Keep only events from trigger_start onwards
-        event_df = event_df.loc[trigger_idx:].reset_index(drop=True)
-        onset_seconds = onset_seconds.loc[trigger_idx:].reset_index(drop=True)
+        # Filter: Keep only events after trigger_start (exclude trigger_start itself)
+        event_df = event_df.loc[trigger_idx + 1:].reset_index(drop=True)
+        onset_seconds = onset_seconds.loc[trigger_idx + 1:].reset_index(drop=True)
         
         # STEP 3: Recalculate onsets relative to normalization reference
-        # Formula: 
-        # - trigger_start row (i=0): onset = 0.0
-        # - All subsequent rows: onset[i] = time_elapsed[i-1] - normalization_reference
+        # Formula: onset[i] = time_elapsed[i-1] - normalization_reference
+        # Note: time_elapsed[i-1] refers to the previous row's time_elapsed value (in seconds)
+        # For the first row after trigger_start, we use trigger_start's time_elapsed as the previous row
         
         normalized_onsets = []
         for i in range(len(onset_seconds)):
             if i == 0:
-                # First row (trigger_start): set to 0.0
-                normalized_onsets.append(0.0)
+                # First row after trigger_start: use trigger_start's time_elapsed as previous
+                prev_event_time = normalization_reference
+                normalized_time = prev_event_time - normalization_reference
+                normalized_onsets.append(normalized_time)
             else:
-                # All subsequent rows: use previous row's time_elapsed
-                # onset[i] = time_elapsed[i-1] - normalization_reference
+                # All subsequent rows: onset[i] = time_elapsed[i-1] - normalization_reference
                 prev_event_time = onset_seconds.iloc[i-1]
                 normalized_time = prev_event_time - normalization_reference
                 normalized_onsets.append(normalized_time)
         
         # Apply precision rounding and update dataframe
         event_df['onset'] = [round(val, float_precision) for val in normalized_onsets]
+        
+        # STEP 4: Reorder rows so fmri_wait_block_trigger_end is first
+        trigger_end_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_end'
+        if trigger_end_mask.any():
+            trigger_end_idx = event_df[trigger_end_mask].index[0]
+            # Create a new order: trigger_end first, then all other rows in original order
+            other_indices = [i for i in range(len(event_df)) if i != trigger_end_idx]
+            new_order = [trigger_end_idx] + other_indices
+            event_df = event_df.iloc[new_order].reset_index(drop=True)
+            logger.info(f"Reordered rows: fmri_wait_block_trigger_end is now first row")
 
-        logger.info(f"Onset normalization complete: removed {trigger_idx} pre-trigger rows, "
-                   f"normalization reference = {normalization_reference:.3f}s (initial={initial_time_elapsed_seconds:.3f}s + rt={trigger_rt_seconds:.3f}s), "
-                   f"trigger_start now at 0.0s")
+        logger.info(f"Onset normalization complete: removed {trigger_idx + 1} pre-trigger rows (including trigger_start), "
+                   f"normalization reference = {normalization_reference:.3f}s (time_elapsed[trigger_start])")
         return True, event_df
     
