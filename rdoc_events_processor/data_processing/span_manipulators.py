@@ -266,12 +266,15 @@ def process_span_data(df, task_name):
                     expanded_rows.append(new_row)
         
         # Handle duplicate_responses and extra_responses (same for both tasks)
-        for response_list, timestamp_list in [(duplicate_responses, duplicate_responses_timestamps), 
-                                            (extra_responses, extra_responses_timestamps)]:
+        # Track source for invalid_cell_selection
+        for response_list, timestamp_list, source_type in [(duplicate_responses, duplicate_responses_timestamps, 'duplicate'), 
+                                                           (extra_responses, extra_responses_timestamps, 'extra')]:
             if response_list:
                 for i, response in enumerate(response_list):
                     new_row = row.copy()
                     new_row['invalid_cell_selection'] = str(response)
+                    # Store source information for tracking
+                    new_row['invalid_response_source'] = source_type
                 
                     if i < len(timestamp_list):
                         new_row['response_time'] = str(timestamp_list[i])
@@ -614,5 +617,104 @@ def calculate_simplespan_trial_type(trial_id_series):
     }
     
     return trial_type_series, counts
+
+
+def calculate_span_recall_acc(event_df):
+    """
+    Calculate accuracy for span_recall rows by comparing correct_cell_order and valid_responses.
+    
+    Sets acc = 1.0 if correct_cell_order == valid_responses (as lists), 0.0 otherwise.
+    Only processes rows where trial_type == 'span_recall'.
+    
+    Args:
+        event_df (pd.DataFrame): Event dataframe with trial_type, correct_cell_order, and valid_responses columns
+        
+    Returns:
+        pd.DataFrame: Updated dataframe with acc column set for span_recall rows
+    """
+    if 'trial_type' not in event_df.columns:
+        return event_df
+    
+    # Filter to span_recall rows
+    span_recall_mask = (event_df['trial_type'] == 'span_recall')
+    
+    if not span_recall_mask.any():
+        return event_df
+    
+    # Initialize acc column if it doesn't exist
+    if 'acc' not in event_df.columns:
+        event_df['acc'] = 'n/a'
+    
+    # Process each span_recall row
+    for idx in event_df[span_recall_mask].index:
+        correct_cell_order_str = event_df.loc[idx, 'correct_cell_order'] if 'correct_cell_order' in event_df.columns else ''
+        valid_responses_str = event_df.loc[idx, 'valid_responses'] if 'valid_responses' in event_df.columns else ''
+        
+        # Parse the list strings
+        correct_cell_order = parse_list_string(correct_cell_order_str)
+        valid_responses = parse_list_string(valid_responses_str)
+        
+        # Compare the lists
+        if correct_cell_order == valid_responses:
+            event_df.loc[idx, 'acc'] = '1.0'
+        else:
+            event_df.loc[idx, 'acc'] = '0.0'
+    
+    return event_df
+
+
+def calculate_partial_acc(event_df):
+    """
+    Calculate partial accuracy for span_recall rows by comparing valid_responses and correct_cell_order.
+    
+    For each span_recall row, compares valid_responses and correct_cell_order element-by-element.
+    Adds +0.25 for each matching item at the same index. Result is between 0-1.
+    
+    Args:
+        event_df (pd.DataFrame): Event dataframe with trial_type, valid_responses, and correct_cell_order columns
+        
+    Returns:
+        pd.DataFrame: Updated dataframe with partial_acc column set for span_recall rows
+    """
+    if 'trial_type' not in event_df.columns:
+        return event_df
+    
+    # Filter to span_recall rows
+    span_recall_mask = (event_df['trial_type'] == 'span_recall')
+    
+    if not span_recall_mask.any():
+        return event_df
+    
+    # Initialize partial_acc column if it doesn't exist
+    if 'partial_acc' not in event_df.columns:
+        event_df['partial_acc'] = 'n/a'
+    
+    # Process each span_recall row
+    for idx in event_df[span_recall_mask].index:
+        valid_responses_str = event_df.loc[idx, 'valid_responses'] if 'valid_responses' in event_df.columns else ''
+        correct_cell_order_str = event_df.loc[idx, 'correct_cell_order'] if 'correct_cell_order' in event_df.columns else ''
+        
+        # Parse the list strings
+        valid_responses = parse_list_string(valid_responses_str)
+        correct_cell_order = parse_list_string(correct_cell_order_str)
+        
+        # Calculate partial accuracy
+        if not correct_cell_order:
+            # If no correct_cell_order, set to n/a
+            event_df.loc[idx, 'partial_acc'] = 'n/a'
+        else:
+            # Compare element by element, add 0.25 for each match
+            matches = 0
+            for i in range(len(correct_cell_order)):
+                if i < len(valid_responses):
+                    # Convert both to strings for comparison
+                    if str(correct_cell_order[i]).strip() == str(valid_responses[i]).strip():
+                        matches += 1
+            
+            # Calculate partial accuracy (0.25 per match, max 1.0)
+            partial_acc_value = min(matches * 0.25, 1.0)
+            event_df.loc[idx, 'partial_acc'] = f"{partial_acc_value:.2f}"
+    
+    return event_df
 
 

@@ -4,6 +4,7 @@ Main event file processor class.
 
 import pandas as pd
 import logging
+import json
 from pathlib import Path
 
 from ..utils.data_loader import load_csv_as_dataframe
@@ -16,7 +17,7 @@ from .calculators import (
     calculate_nback_letter_to_match,
     apply_cuedts_condition_mappings
 )
-from .span_manipulators import process_span_data, find_consecutive_sequences, recalculate_onsets_for_sequences, calculate_opspan_trial_type, calculate_simplespan_trial_type
+from .span_manipulators import process_span_data, find_consecutive_sequences, recalculate_onsets_for_sequences, calculate_opspan_trial_type, calculate_simplespan_trial_type, calculate_span_recall_acc, calculate_partial_acc
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,489 @@ class EventFileProcessor:
             'skipped_files_details': []  # List of (filename, reason) tuples
         }
     
+    def create_span_unfurled_sidecar(self, data, output_path, task_name, subject_id, session_id):
+        """
+        Create unfurled span_recall-only event file for opSpan and simpleSpan tasks.
+        
+        This function performs all the complex unfurling logic (process_span_data, 
+        onset recalculation, etc.) and saves only span_recall rows to a sidecar folder.
+        
+        Args:
+            data (pd.DataFrame): Raw BIDS data containing experimental events
+            output_path (pathlib.Path or str): Original output file path (used to generate sidecar path)
+            task_name (str): Name of the task ('opSpan' or 'simpleSpan')
+            subject_id (str): Subject identifier (for logging/debugging)
+            session_id (str): Session identifier (for logging/debugging)
+            
+        Returns:
+            bool: True if file was successfully created, False if skipped due to missing required data
+        """
+        try:
+            # Filter out call-function events (internal JavaScript calls, not experimental events)
+            if 'trial_type' in data.columns:
+                initial_count = len(data)
+                data = data[data['trial_type'] != 'call-function'].reset_index(drop=True)
+                filtered_count = initial_count - len(data)
+                if filtered_count > 0:
+                    logger.info(f"Filtered out {filtered_count} call-function events from input data")
+            
+            # Get column mappings from config
+            input_columns = self.config.get('input_columns', {})
+            additional_columns = self.config.get('additional_columns', {})
+            exclude_columns = self.config.get('exclude_columns', [])
+            output_settings = self.config.get('output_settings', {})
+            
+            # Get task-specific columns if available
+            task_specific = self.config.get('task_specific_columns', {}).get(task_name, {})
+            
+            # Validate that all required columns are present
+            is_valid, missing_columns = self._validate_required_columns(data, task_name, output_path)
+            if not is_valid:
+                reason = f"Missing required columns: {', '.join(missing_columns)}"
+                logger.info(f"Skipping unfurled sidecar file due to missing required columns: {', '.join(missing_columns)}")
+                return False
+            
+            # Start with additional columns
+            event_data = additional_columns.copy()
+            
+            # Map input columns to event file columns (all required columns validated above)
+            for input_col, event_col in input_columns.items():
+                    # Use custom event column name if specified, otherwise use input column name
+                    col_name = event_col if event_col else input_col
+                    event_data[col_name] = data[input_col]
+            
+            # Add task-specific columns (all columns in task_specific_columns are truly required)
+            for input_col, event_col in task_specific.items():
+                    col_name = event_col if event_col else input_col
+                    event_data[col_name] = data[input_col]
+            
+            # Remove excluded columns (global)
+            for col in exclude_columns:
+                event_data.pop(col, None)
+            
+            # Create DataFrame
+            event_df = pd.DataFrame(event_data)
+            
+            # Add processing-only columns for span tasks (handled gracefully with .get() if missing)
+            common_processing_columns = [
+                'moving_through_grid_timestamps', 'cell_order_through_grid', 'valid_responses', 
+                'duplicate_responses', 'extra_responses', 'valid_responses_timestamps', 
+                'duplicate_responses_timestamps', 'extra_responses_timestamps', 'correct_cell_order'
+            ]
+            
+            for col in common_processing_columns:
+                if col not in event_df.columns:
+                    # Add the column with data from input if available, otherwise empty string
+                    event_df[col] = data.get(col, '')
+            
+            # Add opSpan-specific processing column
+            if task_name == 'opSpan':
+                # Add the column with data from input if available, otherwise empty string
+                event_df['correct_navigation_response'] = data.get('correct_navigation_response', '')
+            
+            # Handle duration column: use stimulus_duration for all rows where it exists, fallback to trial_duration
+            if 'duration' in event_df.columns and 'trial_id' in event_df.columns:
+                # First, use block_duration when it's not null (typically 1 row per file)
+                if 'block_duration' in data.columns:
+                    block_duration_not_na = data['block_duration'].notna() & (data['block_duration'] != 'n/a') & (data['block_duration'] != '')
+                    if block_duration_not_na.any():
+                        event_df.loc[block_duration_not_na, 'duration'] = data.loc[block_duration_not_na, 'block_duration'].values
+                        block_duration_count = block_duration_not_na.sum()
+                        logger.info(f"Used block_duration for {block_duration_count} row(s) where block_duration is not null")
+                
+                # Then, use stimulus_duration for all remaining rows where it exists
+                if 'stimulus_duration' in data.columns:
+                    # Check if block_duration is n/a (if it exists in data)
+                    if 'block_duration' in data.columns:
+                        block_duration_na = data['block_duration'].isna() | (data['block_duration'] == 'n/a') | (data['block_duration'] == '')
+                    else:
+                        # If block_duration doesn't exist, treat all rows as n/a
+                        block_duration_na = pd.Series([True] * len(data), index=data.index)
+                    
+                    # Check if stimulus_duration is not n/a
+                    stimulus_duration_col = data['stimulus_duration']
+                    stimulus_duration_not_na = stimulus_duration_col.notna() & (stimulus_duration_col != 'n/a') & (stimulus_duration_col != '')
+                    
+                    # Use stimulus_duration for rows where block_duration is n/a AND stimulus_duration is not n/a
+                    use_stimulus_duration_mask = block_duration_na & stimulus_duration_not_na
+                    
+                    if use_stimulus_duration_mask.any():
+                        # Replace duration with stimulus_duration for matching rows
+                        event_df.loc[use_stimulus_duration_mask, 'duration'] = data.loc[use_stimulus_duration_mask, 'stimulus_duration'].values
+                        stimulus_duration_count = use_stimulus_duration_mask.sum()
+                        logger.info(f"Used stimulus_duration for {stimulus_duration_count} rows where block_duration is n/a but stimulus_duration is available")
+                
+                # Finally, use trial_duration for remaining rows where both block_duration and stimulus_duration are n/a
+                if 'trial_duration' in data.columns:
+                    # Check if block_duration is n/a (if it exists in data)
+                    if 'block_duration' in data.columns:
+                        block_duration_na = data['block_duration'].isna() | (data['block_duration'] == 'n/a') | (data['block_duration'] == '')
+                    else:
+                        # If block_duration doesn't exist, treat all rows as n/a
+                        block_duration_na = pd.Series([True] * len(data), index=data.index)
+                    
+                    # Check if stimulus_duration is n/a (if it exists in data)
+                    if 'stimulus_duration' in data.columns:
+                        stimulus_duration_na = data['stimulus_duration'].isna() | (data['stimulus_duration'] == 'n/a') | (data['stimulus_duration'] == '')
+                    else:
+                        # If stimulus_duration doesn't exist, treat all rows as n/a
+                        stimulus_duration_na = pd.Series([True] * len(data), index=data.index)
+                    
+                    # Check if trial_duration is not n/a
+                    trial_duration_col = data['trial_duration']
+                    trial_duration_not_na = trial_duration_col.notna() & (trial_duration_col != 'n/a') & (trial_duration_col != '')
+                    
+                    # Use trial_duration for rows where both block_duration and stimulus_duration are n/a AND trial_duration is not n/a
+                    use_trial_duration_mask = block_duration_na & stimulus_duration_na & trial_duration_not_na
+                    
+                    if use_trial_duration_mask.any():
+                        # Replace duration with trial_duration for matching rows
+                        event_df.loc[use_trial_duration_mask, 'duration'] = data.loc[use_trial_duration_mask, 'trial_duration'].values
+                        trial_duration_count = use_trial_duration_mask.sum()
+                        logger.info(f"Used trial_duration for {trial_duration_count} rows where both block_duration and stimulus_duration are n/a but trial_duration is available")
+            
+            # Special processing for span tasks - expand list columns (UNFURLING)
+            logger.info(f"Processing span task data for {task_name} (unfurled sidecar)")
+            event_df = process_span_data(event_df, task_name)
+            
+            # Special processing for opSpan task - modify trial_type based on trial_id
+            if task_name == 'opSpan' and 'trial_id' in event_df.columns and 'trial_type' in event_df.columns:
+                trial_id_col = event_df['trial_id']
+                
+                trial_type_series, counts = calculate_opspan_trial_type(trial_id_col)
+                event_df['trial_type'] = trial_type_series
+                
+                if any(counts.values()):
+                    logger.info(f"Updated trial_type for opSpan: {counts['encoding']} rows set to 'span_encoding', {counts['recall']} rows set to 'span_recall', {counts['operation']} rows set to 'operation', {counts['iti']} rows set to 'n/a'")
+            
+            # Special processing for simpleSpan task - modify trial_type based on trial_id
+            if task_name == 'simpleSpan' and 'trial_id' in event_df.columns and 'trial_type' in event_df.columns:
+                trial_id_col = event_df['trial_id']
+                
+                trial_type_series, counts = calculate_simplespan_trial_type(trial_id_col)
+                event_df['trial_type'] = trial_type_series
+                
+                if any(counts.values()):
+                    logger.info(f"Updated trial_type for simpleSpan: {counts['encoding']} rows set to 'span_encoding', {counts['recall']} rows set to 'span_recall', {counts['other']} rows set to 'n/a'")
+            
+            # Convert onset from milliseconds to seconds and normalize to trigger start
+            # This MUST happen before opSpan/simpleSpan onset recalculation
+            float_precision = output_settings.get('float_precision', 5)  # Default to 5 if not specified
+            success, event_df = self._normalize_onsets_to_trigger_start(event_df, output_path, float_precision)
+            if not success:
+                reason = "Missing fmri_wait_block_initial marker"
+                logger.info(f"Skipping unfurled sidecar file: {reason}")
+                return False
+            
+            # Track sequences for JSON grouping (before filtering)
+            sequences_found = []
+            
+            # Special processing for opSpan task - onset recalculation
+            if task_name == 'opSpan':
+                if 'trial_id' in event_df.columns and 'onset' in event_df.columns and 'response_time' in event_df.columns:
+                    trial_id_col = event_df['trial_id']
+                    
+                    # Ensure onset column is float type to avoid dtype warnings
+                    event_df['onset'] = pd.to_numeric(event_df['onset'], errors='coerce').astype('float64')
+                    
+                    # Convert response_time from milliseconds to seconds (consistent with simpleSpan)
+                    response_time_col = pd.to_numeric(event_df['response_time'], errors='coerce') / 1000.0
+                    
+                    # Identify which rows are part of a "span" sequence
+                    # Use same logic as simpleSpan: look for test_trial rows (which become span_recall)
+                    is_span = (trial_id_col == 'test_trial')
+                    
+                    # Find consecutive sequences of test_trial rows (unified with simpleSpan logic)
+                    sequences_found = find_consecutive_sequences(event_df, is_span, min_sequence_length=2)
+                    
+                    # Recalculate onsets for these sequences using unified algorithm
+                    rows_modified = recalculate_onsets_for_sequences(
+                        event_df, sequences_found, response_time_col, task_name, float_precision
+                    )
+                    
+                    if rows_modified > 0:
+                        logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} test_trial sequences in opSpan task")
+                    
+                    # Reorder ALL "span_recall" rows by onset
+                    if 'onset' in event_df.columns and 'trial_type' in event_df.columns:
+                        span_rows_reordered = 0
+                        for seq_start, seq_end in sequences_found:
+                            if seq_end > seq_start: 
+                                sequence_rows = event_df.loc[seq_start:seq_end].copy()
+                                
+                                # Sort by onset
+                                sequence_rows_sorted = sequence_rows.sort_values('onset').reset_index(drop=True)
+                                
+                                # Update the original dataframe
+                                event_df.loc[seq_start:seq_end] = sequence_rows_sorted.values
+                                span_rows_reordered += (seq_end - seq_start + 1)
+                        
+                        if span_rows_reordered > 0:
+                            logger.info(f"Reordered {span_rows_reordered} span rows by onset in {len(sequences_found)} sequences in opSpan task")
+            
+            # Special processing for simpleSpan task - onset recalculation
+            if task_name == 'simpleSpan':
+                if 'trial_id' in event_df.columns and 'onset' in event_df.columns and 'response_time' in event_df.columns:
+                    trial_id_col = event_df['trial_id']
+                    
+                    # Convert response_time to numeric and from milliseconds to seconds
+                    response_time_col = pd.to_numeric(event_df['response_time'], errors='coerce') / 1000.0
+                    
+                    # Identify which rows are part of a test_trial sequence
+                    is_test_trial = (trial_id_col == 'test_trial')
+                    
+                    # Find consecutive sequences of test_trial rows (requires 2+ consecutive rows)
+                    sequences_found = find_consecutive_sequences(event_df, is_test_trial, min_sequence_length=2)
+                    
+                    # Recalculate onsets for these sequences using unified algorithm
+                    rows_modified = recalculate_onsets_for_sequences(
+                        event_df, sequences_found, response_time_col, task_name, float_precision
+                    )
+                    
+                    if rows_modified > 0:
+                        logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} test_trial sequences in simpleSpan task")
+                    
+                    # Reorder ALL "span_recall" rows by onset
+                    if 'onset' in event_df.columns and 'trial_type' in event_df.columns:
+                        span_rows_reordered = 0
+                        for seq_start, seq_end in sequences_found:
+                            if seq_end > seq_start: 
+                                sequence_rows = event_df.loc[seq_start:seq_end].copy()
+                                
+                                # Sort by onset
+                                sequence_rows_sorted = sequence_rows.sort_values('onset').reset_index(drop=True)
+                                
+                                # Update the original dataframe
+                                event_df.loc[seq_start:seq_end] = sequence_rows_sorted.values
+                                span_rows_reordered += (seq_end - seq_start + 1)
+                        
+                        if span_rows_reordered > 0:
+                            logger.info(f"Reordered {span_rows_reordered} span rows by onset in {len(sequences_found)} sequences in simpleSpan task")
+            
+            # Remove task-specific excluded columns AFTER span processing
+            task_excluded_columns = self.config.get('exclude_columns_by_task', {}).get(task_name, [])
+            for col in task_excluded_columns:
+                if col in event_df.columns:
+                    event_df = event_df.drop(columns=[col])
+            
+            # Store original event_df before filtering (for getting trial onsets)
+            event_df_before_filter = event_df.copy()
+            
+            # Filter to only span_recall rows
+            # Create mapping from original indices to filtered indices for JSON grouping
+            if 'trial_type' in event_df.columns:
+                initial_row_count = len(event_df)
+                span_recall_mask = (event_df['trial_type'] == 'span_recall')
+                original_indices = event_df.index[span_recall_mask].tolist()
+                event_df = event_df[span_recall_mask].reset_index(drop=True)
+                logger.info(f"Filtered to {len(event_df)} span_recall rows from {initial_row_count} total rows")
+                
+                # Create mapping from original index to new index in filtered dataframe
+                original_to_filtered = {orig_idx: new_idx for new_idx, orig_idx in enumerate(original_indices)}
+            else:
+                original_to_filtered = {}
+            
+            # Standardize all empty/null values to 'n/a' format
+            event_df = self._standardize_na_values(event_df)
+            
+            # Reorder columns: onset, duration, trial_type first, then all others alphabetically
+            priority_columns = ['onset', 'duration', 'trial_type']
+            other_columns = sorted([col for col in event_df.columns if col not in priority_columns])
+            column_order = [col for col in priority_columns if col in event_df.columns] + other_columns
+            event_df = event_df[column_order]
+            
+            # Apply float precision if specified
+            if 'float_precision' in output_settings:
+                float_cols = event_df.select_dtypes(include=['float64']).columns
+                event_df[float_cols] = event_df[float_cols].round(output_settings['float_precision'])
+            
+            # Generate sidecar output path
+            # Create span_sidecar directory in root (same level as output directory)
+            output_path_obj = Path(output_path)
+            # Navigate up to find the root (where "output" directory is)
+            # output_path structure: <root>/output/sub-s4/ses-2/filename.tsv
+            # We want: <root>/span_sidecar/sub-s4/ses-2/filename.tsv
+            current = output_path_obj.parent  # ses-2 directory
+            while current.name != 'output' and current.parent != current:
+                current = current.parent
+            # Now current is either the output directory or the root
+            if current.name == 'output':
+                sidecar_root = current.parent / 'span_sidecar'
+            else:
+                # Fallback: create in same directory as output_path's deepest parent
+                sidecar_root = output_path_obj.parent.parent.parent / 'span_sidecar'
+            
+            sidecar_root.mkdir(parents=True, exist_ok=True)
+            
+            # Create subdirectories matching the original structure
+            subject_id_part = output_path_obj.parent.parent.name  # e.g., "sub-s4"
+            session_id_part = output_path_obj.parent.name  # e.g., "ses-2"
+            sidecar_subdir = sidecar_root / subject_id_part / session_id_part
+            sidecar_subdir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate filename with _desc-unfurledResponses_ added after task name
+            original_filename = Path(output_path).name
+            # Format: sub-s4_ses-2_task-opSpan_run-1_events.tsv
+            # Want: sub-s4_ses-2_task-opSpan_desc-unfurledResponses_run-1_events.json
+            if '_task-' in original_filename:
+                parts = original_filename.split('_task-')
+                task_part = parts[1].split('_')[0]  # e.g., "opSpan"
+                rest = '_'.join(parts[1].split('_')[1:])  # e.g., "run-1_events.tsv"
+                # Replace .tsv with .json
+                rest_json = rest.replace('.tsv', '.json')
+                sidecar_filename = f"{parts[0]}_task-{task_part}_desc-unfurledResponses_{rest_json}"
+            else:
+                # Fallback if format is unexpected
+                sidecar_filename = original_filename.replace('.tsv', '_desc-unfurledResponses.json')
+            
+            sidecar_path = sidecar_subdir / sidecar_filename
+            
+            # Skip TSV file creation - only create JSON
+            # Save file
+            # separator = output_settings.get('separator', '\t')
+            # include_header = output_settings.get('include_header', True)
+            # event_df.to_csv(sidecar_path, sep=separator, index=False, header=include_header, na_rep='n/a')
+            # logger.info(f"Created unfurled span_recall-only sidecar file for subject {subject_id}, session {session_id}: {sidecar_path}")
+            
+            # Create JSON file with trials grouped
+            if len(event_df) > 0 and sequences_found:
+                # Helper functions to convert values safely
+                def safe_float(val):
+                    if pd.isna(val) or val == 'n/a' or val == '':
+                        return None
+                    try:
+                        return float(val)
+                    except (ValueError, TypeError):
+                        return None
+                
+                def safe_str(val):
+                    if pd.isna(val) or val == 'n/a' or val == '':
+                        return None
+                    return str(val)
+                
+                # Map sequences to filtered dataframe indices
+                trials_data = []
+                for trial_idx, (seq_start, seq_end) in enumerate(sequences_found):
+                    # Get the trial onset from the first row of the sequence in the original dataframe
+                    # This corresponds to the test_trial row onset in the main events file
+                    trial_onset = None
+                    if seq_start < len(event_df_before_filter) and 'onset' in event_df_before_filter.columns:
+                        trial_onset = safe_float(event_df_before_filter.iloc[seq_start]['onset'])
+                    
+                    # Find which rows in filtered dataframe belong to this sequence
+                    trial_rows = []
+                    for orig_idx in range(seq_start, seq_end + 1):
+                        if orig_idx in original_to_filtered:
+                            filtered_idx = original_to_filtered[orig_idx]
+                            if filtered_idx < len(event_df):
+                                row = event_df.iloc[filtered_idx]
+                                
+                                # Extract required fields (excluding onset - it's now at trial level)
+                                def get_field(col_name):
+                                    if col_name in event_df.columns:
+                                        return row[col_name]
+                                    return None
+                                
+                                cell_movement_val = get_field('cell_movement')
+                                cell_movement_str = safe_str(cell_movement_val)
+                                valid_cell_selection_str = safe_str(get_field('valid_cell_selection'))
+                                invalid_cell_selection_str = safe_str(get_field('invalid_cell_selection'))
+                                
+                                # Determine cell_selection: use valid_cell_selection if available, otherwise invalid_cell_selection
+                                cell_selection_str = None
+                                cell_selection_from_valid = False
+                                if valid_cell_selection_str is not None and valid_cell_selection_str != 'n/a':
+                                    cell_selection_str = valid_cell_selection_str
+                                    cell_selection_from_valid = True
+                                elif invalid_cell_selection_str is not None and invalid_cell_selection_str != 'n/a':
+                                    cell_selection_str = invalid_cell_selection_str
+                                    cell_selection_from_valid = False
+                                
+                                # Determine cell: use cell_movement if available, otherwise cell_selection
+                                cell_val = None
+                                if cell_movement_str is not None and cell_movement_str != 'n/a':
+                                    cell_val = cell_movement_str
+                                elif cell_selection_str is not None and cell_selection_str != 'n/a':
+                                    cell_val = cell_selection_str
+                                
+                                # Determine event_type: priority is valid_response > invalid_response > movement > selection
+                                if valid_cell_selection_str is not None and valid_cell_selection_str != 'n/a':
+                                    event_type = "valid_response"
+                                elif invalid_cell_selection_str is not None and invalid_cell_selection_str != 'n/a':
+                                    event_type = "invalid_response"
+                                elif cell_movement_str is not None and cell_movement_str != 'n/a':
+                                    event_type = "movement"
+                                else:
+                                    event_type = "selection"
+                                
+                                # Get invalid_response_source if available (for tracking duplicate vs extra)
+                                # Set extra and duplicate fields based on source
+                                # If cell_movement is not null, set both to null
+                                extra_val = None
+                                duplicate_val = None
+                                if cell_movement_str is None or cell_movement_str == 'n/a':
+                                    # cell_movement is null, so we can set extra/duplicate
+                                    extra_val = 0.0
+                                    duplicate_val = 0.0
+                                    if invalid_cell_selection_str is not None and invalid_cell_selection_str != 'n/a':
+                                        invalid_response_source = safe_str(get_field('invalid_response_source'))
+                                        if invalid_response_source == 'duplicate':
+                                            duplicate_val = 1.0
+                                        elif invalid_response_source == 'extra':
+                                            extra_val = 1.0
+                                # else: extra_val and duplicate_val remain None (cell_movement is not null)
+                                
+                                # Determine valid field: 1.0 if from valid_responses, 0.0 if from duplicate/extra, null if cell_movement is not null
+                                valid_val = None
+                                if cell_movement_str is None or cell_movement_str == 'n/a':
+                                    # cell_movement is null, so set valid based on source
+                                    if cell_selection_from_valid:
+                                        valid_val = 1.0
+                                    else:
+                                        valid_val = 0.0
+                                # else: valid_val remains None (cell_movement is not null)
+                                
+                                row_data = {
+                                    'event_type': event_type,
+                                    'cell': cell_val,
+                                    'correct_cell': safe_str(get_field('correct_cell')),
+                                    'acc': safe_str(get_field('acc')),
+                                    'valid': valid_val,
+                                    'extra': extra_val,
+                                    'duplicate': duplicate_val,
+                                    'response_time': safe_float(get_field('response_time'))
+                                }
+                                
+                                trial_rows.append(row_data)
+                    
+                    if trial_rows:
+                        trial_data = {
+                            'trial': trial_idx + 1,  # 1-indexed
+                            'onset': trial_onset,
+                            'span_recall_rows': trial_rows
+                        }
+                        trials_data.append(trial_data)
+                
+                # Create JSON structure
+                json_data = {
+                    'subject': subject_id,
+                    'session': session_id,
+                    'task': task_name,
+                    'trials': trials_data
+                }
+                
+                # Save JSON file
+                with open(sidecar_path, 'w') as f:
+                    json.dump(json_data, f, indent=2, allow_nan=False)
+                
+                logger.info(f"Created JSON sidecar file with {len(trials_data)} trials: {sidecar_path}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error creating unfurled sidecar file {output_path}: {e}")
+            return False
+    
     def create_event_file(self, data, output_path, task_name, subject_id, session_id):
         """
         Create a BIDS-compliant event file from raw BIDS data with task-specific processing.
@@ -63,10 +547,14 @@ class EventFileProcessor:
         Performs comprehensive data transformation including:
         - Column mapping from BIDS format to event file format
         - Task-specific calculations (accuracy, trial types, conditions)
-        - Span task data expansion (unfurling list columns into rows)
+        - Span task data expansion (unfurling list columns into rows) - SKIPPED for opSpan/simpleSpan
         - Onset normalization (milliseconds to seconds, trigger-based timing)
         - Duration handling (trial vs block duration selection)
         - Data cleaning (replacing empty values with 'n/a')
+        
+        For opSpan and simpleSpan tasks, this function:
+        1. Creates the main event file WITHOUT unfurling logic
+        2. Also creates an unfurled sidecar file with span_recall rows only
         
         Args:
             data (pd.DataFrame): Raw BIDS data containing experimental events
@@ -264,12 +752,16 @@ class EventFileProcessor:
                         trial_duration_count = use_trial_duration_mask.sum()
                         logger.info(f"Used trial_duration for {trial_duration_count} rows where both block_duration and stimulus_duration are n/a but trial_duration is available")
             
-            # Special processing for span tasks - expand list columns
+            # Special processing for span tasks - SKIP unfurling for main file
+            # For opSpan and simpleSpan, we skip the unfurling logic in the main file
+            # Instead, we create a separate unfurled sidecar file with span_recall rows only
             if task_name in ['opSpan', 'simpleSpan']:
-                logger.info(f"Processing span task data for {task_name}")
-                event_df = process_span_data(event_df, task_name)
+                logger.info(f"Skipping unfurling for {task_name} main event file (will create unfurled sidecar separately)")
+                # Create the unfurled sidecar file with all unfurling logic
+                self.create_span_unfurled_sidecar(data, output_path, task_name, subject_id, session_id)
             
             # Special processing for opSpan task - modify trial_type based on trial_id
+            # Note: For main file, we still set trial_type but don't unfurl
             if task_name == 'opSpan' and 'trial_id' in event_df.columns and 'trial_type' in event_df.columns:
                 trial_id_col = event_df['trial_id']
                 
@@ -278,8 +770,18 @@ class EventFileProcessor:
                 
                 if any(counts.values()):
                     logger.info(f"Updated trial_type for opSpan: {counts['encoding']} rows set to 'span_encoding', {counts['recall']} rows set to 'span_recall', {counts['operation']} rows set to 'operation', {counts['iti']} rows set to 'n/a'")
+                
+                # Set response and response_time to 'n/a' for span_recall rows
+                span_recall_mask = (event_df['trial_type'] == 'span_recall')
+                if span_recall_mask.any():
+                    if 'response' in event_df.columns:
+                        event_df.loc[span_recall_mask, 'response'] = 'n/a'
+                    if 'response_time' in event_df.columns:
+                        event_df.loc[span_recall_mask, 'response_time'] = 'n/a'
+                    logger.info(f"Set response and response_time to 'n/a' for {span_recall_mask.sum()} span_recall rows in opSpan")
             
             # Special processing for simpleSpan task - modify trial_type based on trial_id
+            # Note: For main file, we still set trial_type but don't unfurl
             if task_name == 'simpleSpan' and 'trial_id' in event_df.columns and 'trial_type' in event_df.columns:
                 trial_id_col = event_df['trial_id']
                 
@@ -288,9 +790,33 @@ class EventFileProcessor:
                 
                 if any(counts.values()):
                     logger.info(f"Updated trial_type for simpleSpan: {counts['encoding']} rows set to 'span_encoding', {counts['recall']} rows set to 'span_recall', {counts['other']} rows set to 'n/a'")
+                
+                # Set response and response_time to 'n/a' for span_recall rows
+                span_recall_mask = (event_df['trial_type'] == 'span_recall')
+                if span_recall_mask.any():
+                    if 'response' in event_df.columns:
+                        event_df.loc[span_recall_mask, 'response'] = 'n/a'
+                    if 'response_time' in event_df.columns:
+                        event_df.loc[span_recall_mask, 'response_time'] = 'n/a'
+                    logger.info(f"Set response and response_time to 'n/a' for {span_recall_mask.sum()} span_recall rows in simpleSpan")
+            
+            # Calculate accuracy for span_recall rows (before excluding processing columns)
+            if task_name in ['opSpan', 'simpleSpan']:
+                event_df = calculate_span_recall_acc(event_df)
+                span_recall_count = (event_df['trial_type'] == 'span_recall').sum() if 'trial_type' in event_df.columns else 0
+                if span_recall_count > 0:
+                    acc_1_count = ((event_df['trial_type'] == 'span_recall') & (event_df['acc'] == '1.0')).sum()
+                    acc_0_count = ((event_df['trial_type'] == 'span_recall') & (event_df['acc'] == '0.0')).sum()
+                    logger.info(f"Calculated accuracy for {task_name} span_recall rows: {acc_1_count} correct (1.0), {acc_0_count} incorrect (0.0)")
+                
+                # Calculate partial accuracy for span_recall rows (before excluding processing columns)
+                event_df = calculate_partial_acc(event_df)
+                partial_acc_calculated = ((event_df['trial_type'] == 'span_recall') & (event_df['partial_acc'] != 'n/a')).sum() if 'trial_type' in event_df.columns else 0
+                if partial_acc_calculated > 0:
+                    logger.info(f"Calculated partial accuracy for {partial_acc_calculated} {task_name} span_recall rows")
             
             # Convert onset from milliseconds to seconds and normalize to trigger start
-            # This MUST happen before opSpan/simpleSpan onset recalculation
+            # For span tasks, we skip onset recalculation since we're not unfurling
             float_precision = output_settings.get('float_precision', 5)  # Default to 5 if not specified
             success, event_df = self._normalize_onsets_to_trigger_start(event_df, output_path, float_precision)
             if not success:
@@ -298,97 +824,12 @@ class EventFileProcessor:
                 self.stats['skipped_files_details'].append((output_path.name, reason))
                 return False
             
-            # Special processing for opSpan task
-            # For sequences of test_trial rows (which become span_recall), recalculate onsets based on response_time
-            # Also reorders span_recall rows by onset after recalculation
-            if task_name == 'opSpan':
-                if 'trial_id' in event_df.columns and 'onset' in event_df.columns and 'response_time' in event_df.columns:
-                    trial_id_col = event_df['trial_id']
-                    
-                    # Ensure onset column is float type to avoid dtype warnings
-                    event_df['onset'] = pd.to_numeric(event_df['onset'], errors='coerce').astype('float64')
-                    
-                    # Convert response_time from milliseconds to seconds (consistent with simpleSpan)
-                    response_time_col = pd.to_numeric(event_df['response_time'], errors='coerce') / 1000.0
-                    
-                    # Identify which rows are part of a "span" sequence
-                    # Use same logic as simpleSpan: look for test_trial rows (which become span_recall)
-                    is_span = (trial_id_col == 'test_trial')
-                    
-                    # Find consecutive sequences of test_trial rows (unified with simpleSpan logic)
-                    sequences_found = find_consecutive_sequences(event_df, is_span, min_sequence_length=2)
-                    
-                    # Recalculate onsets for these sequences using unified algorithm
-                    rows_modified = recalculate_onsets_for_sequences(
-                        event_df, sequences_found, response_time_col, task_name, float_precision
-                    )
-                    
-                    if rows_modified > 0:
-                        logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} test_trial sequences in opSpan task")
-                    
-                    # Reorder ALL "span_recall" rows by onset
-                    if 'onset' in event_df.columns and 'trial_type' in event_df.columns:
-                        span_rows_reordered = 0
-                        for seq_start, seq_end in sequences_found:
-                            if seq_end > seq_start: 
-                                sequence_rows = event_df.loc[seq_start:seq_end].copy()
-                                
-                                # Sort by onset
-                                sequence_rows_sorted = sequence_rows.sort_values('onset').reset_index(drop=True)
-                                
-                                # Update the original dataframe
-                                event_df.loc[seq_start:seq_end] = sequence_rows_sorted.values
-                                span_rows_reordered += (seq_end - seq_start + 1)
-                        
-                        if span_rows_reordered > 0:
-                            logger.info(f"Reordered {span_rows_reordered} span rows by onset in {len(sequences_found)} sequences in opSpan task")
-            
-            # Remove task-specific excluded columns AFTER span processing
+            # SKIP onset recalculation for span tasks in main file (only done in unfurled sidecar)
+            # Remove task-specific excluded columns (must be done AFTER calculating accuracy)
             task_excluded_columns = self.config.get('exclude_columns_by_task', {}).get(task_name, [])
             for col in task_excluded_columns:
                 if col in event_df.columns:
                     event_df = event_df.drop(columns=[col])
-            
-            # Special processing for simpleSpan task
-            # For sequences of test_trial rows, recalculate onsets based on response_time
-            # Also reorders span_recall rows by onset after recalculation
-            if task_name == 'simpleSpan':
-                if 'trial_id' in event_df.columns and 'onset' in event_df.columns and 'response_time' in event_df.columns:
-                    trial_id_col = event_df['trial_id']
-                    
-                    # Convert response_time to numeric and from milliseconds to seconds
-                    response_time_col = pd.to_numeric(event_df['response_time'], errors='coerce') / 1000.0
-                    
-                    # Identify which rows are part of a test_trial sequence
-                    is_test_trial = (trial_id_col == 'test_trial')
-                    
-                    # Find consecutive sequences of test_trial rows (requires 2+ consecutive rows)
-                    sequences_found = find_consecutive_sequences(event_df, is_test_trial, min_sequence_length=2)
-                    
-                    # Recalculate onsets for these sequences using unified algorithm
-                    rows_modified = recalculate_onsets_for_sequences(
-                        event_df, sequences_found, response_time_col, task_name, float_precision
-                    )
-                    
-                    if rows_modified > 0:
-                        logger.info(f"Modified onsets for {rows_modified} rows in {len(sequences_found)} test_trial sequences in simpleSpan task")
-                    
-                    # Reorder ALL "span_recall" rows by onset
-                    if 'onset' in event_df.columns and 'trial_type' in event_df.columns:
-                        span_rows_reordered = 0
-                        for seq_start, seq_end in sequences_found:
-                            if seq_end > seq_start: 
-                                sequence_rows = event_df.loc[seq_start:seq_end].copy()
-                                
-                                # Sort by onset
-                                sequence_rows_sorted = sequence_rows.sort_values('onset').reset_index(drop=True)
-                                
-                                # Update the original dataframe
-                                event_df.loc[seq_start:seq_end] = sequence_rows_sorted.values
-                                span_rows_reordered += (seq_end - seq_start + 1)
-                        
-                        if span_rows_reordered > 0:
-                            logger.info(f"Reordered {span_rows_reordered} span rows by onset in {len(sequences_found)} sequences in simpleSpan task")
             
             # Special processing for cuedTS task
             if task_name == 'cuedTS':
@@ -537,12 +978,12 @@ class EventFileProcessor:
                         # Load data
                         data = load_csv_as_dataframe(csv_file)
                         if data is not None:
-                            # Create output filename with zero-padded subject and session numbers
+                            # Create output filename without zero-padding
                             # Extract just the number from subject_id (e.g., "s4" -> "4")
                             subject_num = subject_id.replace('s', '') if subject_id.startswith('s') else subject_id
-                            subject_padded = f"s{subject_num.zfill(2)}"
-                            session_padded = session_id.zfill(2)
-                            output_filename = f"sub-{subject_padded}_ses-{session_padded}_task-{task_name}_run-1_events.tsv"
+                            subject_str = f"s{subject_num}"  # No zero-padding
+                            session_str = session_id  # No zero-padding
+                            output_filename = f"sub-{subject_str}_ses-{session_str}_task-{task_name}_run-1_events.tsv"
                             output_path = subject_output_dir / output_filename
                             
                             # Create event file (this will update stats for data issues)

@@ -62,34 +62,25 @@ rdoc_fmri_events/
   - CLI: `rdoc-events` command
 
 #### `data_processing/` (Core Processing Logic)
-- **`processor.py`**: Main event file processor class
-  - `EventFileProcessor`: Core class for processing BIDS data into event files (including onset calculation)
-  - `create_event_file()`: Creates individual event files
+- **`processor.py`**: Main event file processor
+  - `EventFileProcessor`: Processes BIDS data into event files
+  - `create_event_file()`: Creates individual event files with task-specific processing
+  - `create_span_unfurled_sidecar()`: Creates unfurled JSON sidecar files for span tasks
   - `process_subject_sessions()`: Processes all sessions for a subject
-  - Task mapping and BIDS filename parsing
 
-- **`calculators.py`**: Task-specific calculation functions (nBack, stopSignal, GNG, cuedTS)
-  - `extract_cue_letter_from_image_filename()`: Parses HTML content to extract letter from image filenames (e.g., `lowercase_A.png` → `a`, `uppercase_B.png` → `B`)
-  - `calculate_nback_letter_to_match()`: Implements n-back working memory logic by finding letter from N trials back in history (1-back or 2-back)
-  - `calculate_stop_accuracy()`: Returns accuracy score (1.0/0.0) for stop trials, sets `'n/a'` for go trials in stopSignal task
-  - `calculate_go_accuracy()`: Returns accuracy score (1.0/0.0) for go trials, sets `'n/a'` for stop trials in stopSignal task
-  - `calculate_trial_type_stopSignal()`: Maps condition + correctness to trial types (e.g., `condition='go'` + `correct_trial=1.0` → `'go_success'`)
-  - `calculate_go_nogo_condition()`: Maps condition + correctness to conditions (e.g., `condition='nogo'` + `correct_trial=0.0` → `'nogo_failure'`)
-  - `apply_cuedts_condition_mappings()`: Manages cue/task condition columns for cuedTS task by setting `correct_response='n/a'` for test_cue trials, `task_condition='n/a'` for test_cue/other trials, `cue_condition='n/a'` for test_trial/other trials, and propagates n/a values to corresponding `cue`/`task` columns
+- **`calculators.py`**: Task-specific calculation functions
+  - Accuracy calculations for stopSignal, goNogo tasks
+  - Trial type mappings for various tasks
+  - Condition mappings for cuedTS task
+  - Letter extraction for nBack task
 
-- **`span_manipulators.py`**: Span task data manipulation and onset recalculation (simpleSpan and opSpan)
-  - `process_span_data()`: **1st** - Transforms compressed span task data into individual event rows:
-    - Converts list columns stored as strings (e.g., `valid_response_timestamps` = `[100, 500, 900]` and `valid_respones` = `[1, 2, 3]`) into separate rows for each timestamp/response (via utility functuon `parse_list_string`)
-    - Maintains correspondence between related lists (e.g., `timestamp[i]` aligns with `response[i]` and `cell_order[i]`)
-    - Processes `moving_through_grid_timestamps` and `valid_responses_timestamps` to create `response_time` values
-    - Maps `cell_order_through_grid` to `cell_movement` for each expanded row
-    - Sets `valid_cell_selection`, `invalid_cell_selection` based on response type (`valid_responses`, `duplicate_responses`, `extra_responses`) where "invalid" includes both duplicate and extra responses
-    - Sorts consecutive `test_trial` rows by `response_time` within clusters (via utility function `_sort_test_trial_clusters_by_response_time`)
-    - Computes accuracy by comparing `valid_cell_selection` vs `correct_cell` and ignoring invalid selections; they get acc = "n/a" (via utility function `_calculate_unified_accuracy`)
-  - `calculate_opspan_trial_type()`: **2nd** - Maps `trial_id` values to event types (`'test_stim'` → `'span_encoding'`, `'test_trial'` → `'span_recall'`, `'test_inter-stimulus'` → `'operation'`, `'test_ITI'` → `'n/a'`)
-  - `calculate_simplespan_trial_type()`: **2nd** - Maps `trial_id` values to event types (`'test_stim'` → `'span_encoding'`, `'test_trial'` → `'span_recall'`, all others → `'n/a'`)
-  - `find_consecutive_sequences()`: **3rd** - Identifies consecutive test_trial rows for sequence-based processing
-  - `recalculate_onsets_for_sequences()`: **4th** - Recalculates onset timing within test_trial sequences using response time data
+- **`span_manipulators.py`**: Span task data manipulation
+  - `process_span_data()`: Unfurls compressed list data into individual event rows (used in sidecar JSON files only)
+  - `calculate_opspan_trial_type()` / `calculate_simplespan_trial_type()`: Maps trial_id to trial_type (used in both main TSV and sidecar JSON files)
+  - `calculate_span_recall_acc()`: Calculates accuracy for span_recall rows by comparing lists (used in main TSV files only)
+  - `calculate_partial_acc()`: Calculates partial accuracy (0.25 per correct response respective of order) (used in main TSV files only)
+  - `find_consecutive_sequences()`: Identifies consecutive sequences for recalculation (used in sidecar JSON files only)
+  - `recalculate_onsets_for_sequences()`: Recalculates onsets within sequences using response times (used in sidecar JSON files only)
 
 
 #### `utils/` (Utility Functions)
@@ -114,65 +105,18 @@ rdoc_fmri_events/
 
 ## Onset Calculation
 
-1. **Initial Column Mapping**: Raw `time_elapsed` data (milliseconds) is mapped to the `onset` column
-2. **Primary Normalization**: Times are converted to seconds and normalized to a reference point
-3. **Recalculation for simpleSpan and opSpan span_recall sequences**: Span tasks undergo additional timing adjustments based on response times
+All event files use a two-step onset calculation process:
 
-### Primary Normalization: 
+### Step 1: Primary Normalization (All Tasks)
 
-#### (1) `_normalize_onsets_to_trigger_start(event_df, output_path, float_precision=5)`
+The `_normalize_onsets_to_trigger_start()` function normalizes timing for all tasks:
 
-**Location**: `EventFileProcessor.create_event_file()` → Line 277
+1. **Convert to seconds**: Milliseconds are converted to seconds (`/ 1000.0`)
+2. **Get normalization reference point**: Set normalization_reference = time_elapsed[`fmri_wait_block_trigger_start`]
+3. **Filter events**: Removes all events before `fmri_wait_block_trigger_end` marker
+3. **Normalize all onsets to trigger**: `onset[i] = time_elapsed[i-1] - time_elapsed[trigger_start]` (thus the first event is `fmri_wait_block_trigger_end`, with an onset of 0.0)
 
-**Purpose**: Main onset normalization function that handles the core timing transformation for all tasks
-
-**What it does**:
-1. **Milliseconds to Seconds Conversion**: Converts `onset` values from milliseconds to seconds (`/ 1000.0`)
-2. **Reference Point Identification**: Locates the `fmri_wait_block_initial` marker to establish the timing reference
-3. **Data Filtering**: Removes all events that occurred before the `fmri_wait_block_trigger_start` marker
-4. **Normalization Formula**: Applies `onset[i] = (time_elapsed[i-1] - initial_onset_time)` to set trigger_start at 0.0 seconds
-5. **Precision Control**: Uses configurable `float_precision` parameter for rounding onset values
-
-**Critical Requirements**:
-- File must contain `fmri_wait_block_initial` marker (files without this are skipped)
-- File must contain `fmri_wait_block_trigger_start` marker (files without this are skipped)
-
-### Sequence Recalculation (only applied to span_recall events for simpleSpan and opSpan)
-
-#### (1) `find_consecutive_sequences(event_df, condition_series, min_sequence_length=1)`
-
-**Location**: `span_manipulators.py` - Called from `create_event_file()` for span tasks (Lines 301 for opSpan, 348 for simpleSpan)
-
-**Purpose**: Identifies consecutive rows that match a specific condition for sequence-based processing
-
-**What it does**:
-- Finds contiguous blocks of rows matching a boolean condition
-- Returns list of `(start_index, end_index)` tuples for each sequence
-- **Both opSpan and simpleSpan**: Detect sequences with `min_sequence_length=2` of `trial_id == 'test_trial'` rows (which become `trial_type == 'span_recall'`)
-
-#### (2) `recalculate_onsets_for_sequences(event_df, sequences_found, response_time_col, task_name, float_precision=5)`
-
-**Location**: `span_manipulators.py` - Called from `create_event_file()` for span tasks (Lines 304-306 for opSpan, 351-353 for simpleSpan)
-
-**Purpose**: Recalculates onset timing within span task sequences using response time data
-
-**What it does**:
-1. **Sequence Detection**: Identifies consecutive sequences of `trial_id == 'test_trial'` rows for both opSpan and simpleSpan (which become `trial_type == 'span_recall'`)
-2. **Response Time Integration**: Uses `response_time` data to adjust onset timing within sequences
-3. **Task-Specific Logic**: Implements identical calculation formulas for both opSpan and simpleSpan tasks:
-
-**Logic for unfurling opSpan and simpleSpan span_recall events** (identical):
-- First row in sequence: Keep its normalized onset unchanged
-- Second row in sequence: `onset[i] = onset[i-1] + response_time[i-1]`
-- Subsequent rows: `onset[i] = onset[i-1] + (response_time[i] - response_time[i-1])`
-
-### Processing Order and Dependencies
-
-The onset calculation follows this strict sequence:
-
-1. **Column Mapping** (Lines 110-114): `time_elapsed` → `onset` (raw milliseconds)
-2. **Primary Normalization** (Line 277): `_normalize_onsets_to_trigger_start()` - converts to seconds and normalizes to trigger
-3. **Span Task Recalculation** (Lines 304-306, 351-353): `recalculate_onsets_for_sequences()` from `span_manipulators.py` - applies sequence-specific timing adjustments
+**Requirements**: Files must contain both `fmri_wait_block_start` and `fmri_wait_block_trigger_end` markers.
 
 ## Input Data Format
 
@@ -198,14 +142,22 @@ Event files are created in the following format:
 
 ```
 output_directory/
-├── sub-s04/
-│   ├── ses-01/
-│   │   ├── sub-s04_ses-01_task-goNogo_run-1_events.tsv
-│   │   └── sub-s04_ses-01_task-flanker_run-1_events.tsv
-│   └── ses-02/
+├── sub-s4/
+│   ├── ses-1/
+│   │   ├── sub-s4_ses-1_task-goNogo_run-1_events.tsv
+│   │   └── sub-s4_ses-1_task-flanker_run-1_events.tsv
+│   └── ses-2/
 │       └── ...
-└── sub-s05/
+└── sub-s5/
     └── ...
+
+span_sidecar/
+├── sub-s4/
+│   ├── ses-2/
+│   │   ├── sub-s4_ses-2_task-opSpan_desc-unfurledResponses_run-1_events.json
+│   │   └── sub-s4_ses-2_task-simpleSpan_desc-unfurledResponses_run-1_events.json
+│   └── ...
+└── ...
 ```
 
 ### Column Ordering
@@ -218,6 +170,56 @@ Event files follow a consistent column ordering:
    - `trial_type` - Trial condition
 
 2. **All other columns** - Sorted alphabetically
+
+### Span Sidecar JSON Files
+
+For `opSpan` and `simpleSpan` tasks, the processor creates additional JSON sidecar files in the `span_sidecar/` directory. These files contain unfurled `span_recall` events grouped by trial.
+
+**File naming**: `sub-{subject}_ses-{session}_task-{task}_desc-unfurledResponses_run-1_events.json`
+
+**Structure**:
+```json
+{
+  "subject": "s4",
+  "session": "2",
+  "task": "opSpan",
+  "trials": [
+    {
+      "trial": 1,
+      "onset": 24.658,
+      "span_recall_rows": [
+        {
+          "event_type": "movement|valid_response|invalid_response|selection",
+          "cell": "5",
+          "correct_cell": "5",
+          "acc": "1.0",
+          "valid": 1.0,
+          "extra": 0.0,
+          "duplicate": 0.0,
+          "response_time": 1444.0
+        },
+        ...
+      ]
+    },
+    ...
+  ]
+}
+```
+
+**Fields**:
+- `trial`: Trial number (1-indexed)
+- `onset`: Trial onset from the main events file (corresponding `test_trial` row onset)
+- `span_recall_rows`: Array of all unfurled span_recall events for this trial
+  - `event_type`: "movement" (cell_movement present), "valid_response" (valid_cell_selection), "invalid_response" (invalid_cell_selection), or "selection" (neither)
+  - `cell`: Combined cell value from either cell_movement or cell_selection (whichever is present)
+  - `correct_cell`: The correct cell value for this position
+  - `acc`: Accuracy (1.0/0.0/n/a)
+  - `valid`: 1.0 if from valid_responses, 0.0 if from duplicate/extra, null if movement
+  - `extra`: 1.0 if invalid response from extra_responses, 0.0 otherwise, null if movement
+  - `duplicate`: 1.0 if invalid response from duplicate_responses, 0.0 otherwise, null if movement
+  - `response_time`: Response time in seconds
+
+**Note**: These JSON files contain the fully unfurled and recalculated span_recall events with precise timing, while the main TSV files contain the original unfurled data.
 
 ## Supported Tasks
 
