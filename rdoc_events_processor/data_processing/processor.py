@@ -82,7 +82,7 @@ class EventFileProcessor:
             # Filter out call-function events (internal JavaScript calls, not experimental events)
             if 'trial_type' in data.columns:
                 initial_count = len(data)
-                data = data[data['trial_type'] != 'call-function']
+                data = data[data['trial_type'] != 'call-function'].reset_index(drop=True)
                 filtered_count = initial_count - len(data)
                 if filtered_count > 0:
                     logger.info(f"Filtered out {filtered_count} call-function events from input data")
@@ -203,48 +203,66 @@ class EventFileProcessor:
                 # Add the column with data from input if available, otherwise empty string
                 event_df['correct_navigation_response'] = data.get('correct_navigation_response', '')
             
-            # Handle duration column: use trial_duration or block_duration when appropriate
+            # Handle duration column: use stimulus_duration for all rows where it exists, fallback to trial_duration
             if 'duration' in event_df.columns and 'trial_id' in event_df.columns:
-                # Check if we have trial_duration available in the original data
-                if 'trial_duration' in data.columns:
-                    trial_id_col = event_df['trial_id']
-                    duration_col = event_df['duration']
-                    trial_duration_col = data['trial_duration']
-                    
-                    # Condition 1: test_trial rows always use trial_duration
-                    test_trial_mask = (trial_id_col == 'test_trial')
-                    
-                    # Condition 2: both block_duration and stimulus_duration are n/a, but trial_duration is not
-                    # Check if stimulus_duration (mapped to duration) is n/a
-                    stimulus_duration_na = duration_col.isna() | (duration_col == 'n/a') | (duration_col == '')
-                    
-                    # Check if block_duration is n/a (if it exists in data)
-                    if 'block_duration' in data.columns:
-                        block_duration_na = data['block_duration'].isna() | (data['block_duration'] == 'n/a') | (data['block_duration'] == '')
-                    else:
-                        # If block_duration doesn't exist, treat as n/a
-                        block_duration_na = pd.Series([True] * len(data), index=data.index)
-                    
-                    # Check if trial_duration is not n/a
-                    trial_duration_not_na = trial_duration_col.notna() & (trial_duration_col != 'n/a') & (trial_duration_col != '')
-                    
-                    # Combine conditions: test_trial OR (both durations n/a AND trial_duration not n/a)
-                    use_trial_duration_mask = test_trial_mask | (stimulus_duration_na & block_duration_na & trial_duration_not_na)
-                    
-                    if use_trial_duration_mask.any():
-                        # Replace duration with trial_duration for matching rows
-                        event_df.loc[use_trial_duration_mask, 'duration'] = data.loc[use_trial_duration_mask, 'trial_duration'].values
-                        test_trial_count = test_trial_mask.sum()
-                        fallback_count = (use_trial_duration_mask & ~test_trial_mask).sum()
-                        logger.info(f"Used trial_duration for {use_trial_duration_mask.sum()} rows: {test_trial_count} test_trial rows, {fallback_count} rows with n/a stimulus/block duration")
-                
-                # Use block_duration when it's not null (typically 1 row per file)
+                # First, use block_duration when it's not null (typically 1 row per file)
                 if 'block_duration' in data.columns:
                     block_duration_not_na = data['block_duration'].notna() & (data['block_duration'] != 'n/a') & (data['block_duration'] != '')
                     if block_duration_not_na.any():
                         event_df.loc[block_duration_not_na, 'duration'] = data.loc[block_duration_not_na, 'block_duration'].values
                         block_duration_count = block_duration_not_na.sum()
                         logger.info(f"Used block_duration for {block_duration_count} row(s) where block_duration is not null")
+                
+                # Then, use stimulus_duration for all remaining rows where it exists
+                if 'stimulus_duration' in data.columns:
+                    # Check if block_duration is n/a (if it exists in data)
+                    if 'block_duration' in data.columns:
+                        block_duration_na = data['block_duration'].isna() | (data['block_duration'] == 'n/a') | (data['block_duration'] == '')
+                    else:
+                        # If block_duration doesn't exist, treat all rows as n/a
+                        block_duration_na = pd.Series([True] * len(data), index=data.index)
+                    
+                    # Check if stimulus_duration is not n/a
+                    stimulus_duration_col = data['stimulus_duration']
+                    stimulus_duration_not_na = stimulus_duration_col.notna() & (stimulus_duration_col != 'n/a') & (stimulus_duration_col != '')
+                    
+                    # Use stimulus_duration for rows where block_duration is n/a AND stimulus_duration is not n/a
+                    use_stimulus_duration_mask = block_duration_na & stimulus_duration_not_na
+                    
+                    if use_stimulus_duration_mask.any():
+                        # Replace duration with stimulus_duration for matching rows
+                        event_df.loc[use_stimulus_duration_mask, 'duration'] = data.loc[use_stimulus_duration_mask, 'stimulus_duration'].values
+                        stimulus_duration_count = use_stimulus_duration_mask.sum()
+                        logger.info(f"Used stimulus_duration for {stimulus_duration_count} rows where block_duration is n/a but stimulus_duration is available")
+                
+                # Finally, use trial_duration for remaining rows where both block_duration and stimulus_duration are n/a
+                if 'trial_duration' in data.columns:
+                    # Check if block_duration is n/a (if it exists in data)
+                    if 'block_duration' in data.columns:
+                        block_duration_na = data['block_duration'].isna() | (data['block_duration'] == 'n/a') | (data['block_duration'] == '')
+                    else:
+                        # If block_duration doesn't exist, treat all rows as n/a
+                        block_duration_na = pd.Series([True] * len(data), index=data.index)
+                    
+                    # Check if stimulus_duration is n/a (if it exists in data)
+                    if 'stimulus_duration' in data.columns:
+                        stimulus_duration_na = data['stimulus_duration'].isna() | (data['stimulus_duration'] == 'n/a') | (data['stimulus_duration'] == '')
+                    else:
+                        # If stimulus_duration doesn't exist, treat all rows as n/a
+                        stimulus_duration_na = pd.Series([True] * len(data), index=data.index)
+                    
+                    # Check if trial_duration is not n/a
+                    trial_duration_col = data['trial_duration']
+                    trial_duration_not_na = trial_duration_col.notna() & (trial_duration_col != 'n/a') & (trial_duration_col != '')
+                    
+                    # Use trial_duration for rows where both block_duration and stimulus_duration are n/a AND trial_duration is not n/a
+                    use_trial_duration_mask = block_duration_na & stimulus_duration_na & trial_duration_not_na
+                    
+                    if use_trial_duration_mask.any():
+                        # Replace duration with trial_duration for matching rows
+                        event_df.loc[use_trial_duration_mask, 'duration'] = data.loc[use_trial_duration_mask, 'trial_duration'].values
+                        trial_duration_count = use_trial_duration_mask.sum()
+                        logger.info(f"Used trial_duration for {trial_duration_count} rows where both block_duration and stimulus_duration are n/a but trial_duration is available")
             
             # Special processing for span tasks - expand list columns
             if task_name in ['opSpan', 'simpleSpan']:
@@ -624,7 +642,7 @@ class EventFileProcessor:
         This function performs three main operations:
         1. Converts onset values from milliseconds to seconds
         2. Filters out events that occurred before the trigger_start marker
-        3. Recalculates onsets relative to the fmri_wait_block_initial reference point
+        3. Recalculates onsets relative to trigger_start row: normalization_reference = time_elapsed[trigger_start] - rt[trigger_start]
         
         Args:
             event_df (pd.DataFrame): Event dataframe with 'onset' column containing millisecond timestamps
@@ -648,16 +666,17 @@ class EventFileProcessor:
         onset_seconds = onset_series / 1000.0
 
         # STEP 1: Validate and locate the reference marker (fmri_wait_block_initial)
+        # This is still needed to identify files that should be processed
         initial_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_initial'
         
         if not initial_row_mask.any():
             logger.warning(f"No 'fmri_wait_block_initial' trial_id found in file {output_path.name}. "
                          f"Skipping this file as it likely contains practice/prescan data.")
             return False, None
-            
-        # Get the reference time before any filtering occurs
+        
+        # Get initial time_elapsed BEFORE filtering (needed for normalization reference)
         initial_idx = event_df[initial_row_mask].index[0]
-        initial_onset_time = onset_seconds.loc[initial_idx]
+        initial_time_elapsed_seconds = onset_seconds.iloc[initial_idx]
         
         # STEP 2: Locate and filter to trigger_start marker
         trigger_row_mask = event_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
@@ -668,33 +687,53 @@ class EventFileProcessor:
             
         trigger_idx = event_df[trigger_row_mask].index[0]
         
+        # Get trigger_start row data BEFORE filtering (need original rt value)
+        # Try to get rt from response_time column (mapped from rt) or directly from rt if available
+        rt_col = event_df.get('response_time', pd.Series())
+        if rt_col.empty or trigger_idx >= len(rt_col):
+            # Fallback to rt column if response_time not available
+            rt_col = event_df.get('rt', pd.Series())
+        
+        # Get rt value for trigger_start row
+        if trigger_idx < len(rt_col):
+            trigger_rt_ms = pd.to_numeric(rt_col.iloc[trigger_idx], errors='coerce')
+            if pd.isna(trigger_rt_ms):
+                trigger_rt_ms = 0.0
+        else:
+            trigger_rt_ms = 0.0
+        
+        # Convert rt from milliseconds to seconds
+        trigger_rt_seconds = trigger_rt_ms / 1000.0
+        
+        # Calculate normalization reference: time_elapsed[initial] + rt[trigger_start]
+        normalization_reference = initial_time_elapsed_seconds + trigger_rt_seconds
+        
         # Filter: Keep only events from trigger_start onwards
         event_df = event_df.loc[trigger_idx:].reset_index(drop=True)
         onset_seconds = onset_seconds.loc[trigger_idx:].reset_index(drop=True)
         
-        # STEP 3: Recalculate onsets relative to initial reference point
-        # Formula: onset[i] = (time_elapsed[i-1] - initial_onset_time) for all rows
-        # This makes trigger_start = 0.0 and all subsequent events positive
+        # STEP 3: Recalculate onsets relative to normalization reference
+        # Formula: 
+        # - trigger_start row (i=0): onset = 0.0
+        # - All subsequent rows: onset[i] = time_elapsed[i-1] - normalization_reference
         
         normalized_onsets = []
         for i in range(len(onset_seconds)):
             if i == 0:
-                # First row (trigger_start): use the original initial time as reference
-                # Result: onset[0] = (initial_onset_time - initial_onset_time) = 0.0
-                prev_event_time = initial_onset_time
+                # First row (trigger_start): set to 0.0
+                normalized_onsets.append(0.0)
             else:
-                # Use the previous row's actual time_elapsed value
+                # All subsequent rows: use previous row's time_elapsed
+                # onset[i] = time_elapsed[i-1] - normalization_reference
                 prev_event_time = onset_seconds.iloc[i-1]
-            
-            # Normalize: subtract the initial reference point
-            normalized_time = prev_event_time - initial_onset_time
-            normalized_onsets.append(normalized_time)
+                normalized_time = prev_event_time - normalization_reference
+                normalized_onsets.append(normalized_time)
         
         # Apply precision rounding and update dataframe
         event_df['onset'] = [round(val, float_precision) for val in normalized_onsets]
 
         logger.info(f"Onset normalization complete: removed {trigger_idx} pre-trigger rows, "
-                   f"normalized to initial reference ({initial_onset_time:.3f}s), "
+                   f"normalization reference = {normalization_reference:.3f}s (initial={initial_time_elapsed_seconds:.3f}s + rt={trigger_rt_seconds:.3f}s), "
                    f"trigger_start now at 0.0s")
         return True, event_df
     
