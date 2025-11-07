@@ -105,9 +105,7 @@ rdoc_fmri_events/
 
 ## Onset Calculation
 
-All event files use a two-step onset calculation process:
-
-### Step 1: Primary Normalization (All Tasks)
+All event onsets are normalized to the moment the first "t" is recieved by the scanner.
 
 The `_normalize_onsets_to_trigger_start()` function normalizes timing for all tasks:
 
