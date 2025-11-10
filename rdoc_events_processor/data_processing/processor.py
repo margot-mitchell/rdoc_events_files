@@ -137,7 +137,7 @@ class EventFileProcessor:
                 # Add the column with data from input if available, otherwise empty string
                 event_df['correct_navigation_response'] = data.get('correct_navigation_response', '')
             
-            # Handle duration column: use stimulus_duration for all rows where it exists, fallback to trial_duration
+            # Handle duration column: priority: block_duration > stimulus_duration > trial_duration
             if 'duration' in event_df.columns and 'trial_id' in event_df.columns:
                 # First, use block_duration when it's not null (typically 1 row per file)
                 if 'block_duration' in data.columns:
@@ -147,29 +147,30 @@ class EventFileProcessor:
                         block_duration_count = block_duration_not_na.sum()
                         logger.info(f"Used block_duration for {block_duration_count} row(s) where block_duration is not null")
                 
-                # Then, use stimulus_duration for all remaining rows where it exists
-                if 'stimulus_duration' in data.columns:
-                    # Check if block_duration is n/a (if it exists in data)
-                    if 'block_duration' in data.columns:
-                        block_duration_na = data['block_duration'].isna() | (data['block_duration'] == 'n/a') | (data['block_duration'] == '')
-                    else:
-                        # If block_duration doesn't exist, treat all rows as n/a
-                        block_duration_na = pd.Series([True] * len(data), index=data.index)
-                    
-                    # Check if stimulus_duration is not n/a
-                    stimulus_duration_col = data['stimulus_duration']
-                    stimulus_duration_not_na = stimulus_duration_col.notna() & (stimulus_duration_col != 'n/a') & (stimulus_duration_col != '')
-                    
-                    # Use stimulus_duration for rows where block_duration is n/a AND stimulus_duration is not n/a
-                    use_stimulus_duration_mask = block_duration_na & stimulus_duration_not_na
-                    
-                    if use_stimulus_duration_mask.any():
-                        # Replace duration with stimulus_duration for matching rows
-                        event_df.loc[use_stimulus_duration_mask, 'duration'] = data.loc[use_stimulus_duration_mask, 'stimulus_duration'].values
-                        stimulus_duration_count = use_stimulus_duration_mask.sum()
-                        logger.info(f"Used stimulus_duration for {stimulus_duration_count} rows where block_duration is n/a but stimulus_duration is available")
+                # TEMPORARILY COMMENTED OUT: use stimulus_duration for rows where block_duration is n/a (prefer over trial_duration)
+                # if 'stimulus_duration' in data.columns:
+                #     # Check if block_duration is n/a (if it exists in data)
+                #     if 'block_duration' in data.columns:
+                #         block_duration_na = data['block_duration'].isna() | (data['block_duration'] == 'n/a') | (data['block_duration'] == '')
+                #     else:
+                #         # If block_duration doesn't exist, treat all rows as n/a
+                #         block_duration_na = pd.Series([True] * len(data), index=data.index)
+                #     
+                #     # Check if stimulus_duration is not n/a
+                #     stimulus_duration_col = data['stimulus_duration']
+                #     stimulus_duration_not_na = stimulus_duration_col.notna() & (stimulus_duration_col != 'n/a') & (stimulus_duration_col != '')
+                #     
+                #     # Use stimulus_duration for rows where block_duration is n/a AND stimulus_duration is not n/a
+                #     # This will use stimulus_duration even if trial_duration is also not n/a
+                #     use_stimulus_duration_mask = block_duration_na & stimulus_duration_not_na
+                #     
+                #     if use_stimulus_duration_mask.any():
+                #         # Replace duration with stimulus_duration for matching rows
+                #         event_df.loc[use_stimulus_duration_mask, 'duration'] = data.loc[use_stimulus_duration_mask, 'stimulus_duration'].values
+                #         stimulus_duration_count = use_stimulus_duration_mask.sum()
+                #         logger.info(f"Used stimulus_duration for {stimulus_duration_count} rows where block_duration is n/a but stimulus_duration is available")
                 
-                # Finally, use trial_duration for remaining rows where both block_duration and stimulus_duration are n/a
+                # Use trial_duration for rows where block_duration is n/a (TEMPORARY: prefer trial_duration over stimulus_duration)
                 if 'trial_duration' in data.columns:
                     # Check if block_duration is n/a (if it exists in data)
                     if 'block_duration' in data.columns:
@@ -178,25 +179,31 @@ class EventFileProcessor:
                         # If block_duration doesn't exist, treat all rows as n/a
                         block_duration_na = pd.Series([True] * len(data), index=data.index)
                     
-                    # Check if stimulus_duration is n/a (if it exists in data)
-                    if 'stimulus_duration' in data.columns:
-                        stimulus_duration_na = data['stimulus_duration'].isna() | (data['stimulus_duration'] == 'n/a') | (data['stimulus_duration'] == '')
-                    else:
-                        # If stimulus_duration doesn't exist, treat all rows as n/a
-                        stimulus_duration_na = pd.Series([True] * len(data), index=data.index)
-                    
                     # Check if trial_duration is not n/a
                     trial_duration_col = data['trial_duration']
                     trial_duration_not_na = trial_duration_col.notna() & (trial_duration_col != 'n/a') & (trial_duration_col != '')
                     
-                    # Use trial_duration for rows where both block_duration and stimulus_duration are n/a AND trial_duration is not n/a
-                    use_trial_duration_mask = block_duration_na & stimulus_duration_na & trial_duration_not_na
+                    # TEMPORARY: Use trial_duration for rows where block_duration is n/a AND trial_duration is not n/a
+                    # (This will use trial_duration even if stimulus_duration is also not n/a)
+                    use_trial_duration_mask = block_duration_na & trial_duration_not_na
                     
                     if use_trial_duration_mask.any():
                         # Replace duration with trial_duration for matching rows
                         event_df.loc[use_trial_duration_mask, 'duration'] = data.loc[use_trial_duration_mask, 'trial_duration'].values
                         trial_duration_count = use_trial_duration_mask.sum()
-                        logger.info(f"Used trial_duration for {trial_duration_count} rows where both block_duration and stimulus_duration are n/a but trial_duration is available")
+                        logger.info(f"Used trial_duration for {trial_duration_count} rows where block_duration is n/a but trial_duration is available")
+                
+                # Adjust test_trial rows to use stimulus_duration and insert blank_screen rows
+                event_df = self._adjust_test_trial_events(event_df, data, task_name)
+                
+                if task_name == 'spatialTS' and 'trial_id' in event_df.columns:
+                    replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation'}
+                    event_df['trial_id'] = event_df['trial_id'].replace(replacements)
+                
+                # Spatial task switching: rename cue and ITI trial_ids for clarity
+                if task_name == 'spatialTS' and 'trial_id' in event_df.columns:
+                    replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation'}
+                    event_df['trial_id'] = event_df['trial_id'].replace(replacements)
             
             # Special processing for span tasks - expand list columns (UNFURLING)
             logger.info(f"Processing span task data for {task_name} (unfurled sidecar)")
@@ -340,6 +347,14 @@ class EventFileProcessor:
                 original_to_filtered = {}
             
             # Standardize all empty/null values to 'n/a' format
+            if task_name == 'spatialTS' and 'trial_id' in event_df.columns:
+                replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation'}
+                before_counts = event_df['trial_id'].isin(replacements.keys()).sum()
+                event_df['trial_id'] = event_df['trial_id'].replace(replacements)
+                if before_counts:
+                    logger.info(f"Renamed {before_counts} spatialTS trial_id values (test_cue/test_ITI) to blank_screen/fixation")
+            
+            event_df = self._strip_test_prefix_from_trial_id(event_df)
             event_df = self._standardize_na_values(event_df)
             
             # Reorder columns: onset, duration, trial_type first, then all others alphabetically
@@ -691,7 +706,7 @@ class EventFileProcessor:
                 # Add the column with data from input if available, otherwise empty string
                 event_df['correct_navigation_response'] = data.get('correct_navigation_response', '')
             
-            # Handle duration column: use stimulus_duration for all rows where it exists, fallback to trial_duration
+            # Handle duration column: priority: block_duration > stimulus_duration > trial_duration
             if 'duration' in event_df.columns and 'trial_id' in event_df.columns:
                 # First, use block_duration when it's not null (typically 1 row per file)
                 if 'block_duration' in data.columns:
@@ -701,29 +716,30 @@ class EventFileProcessor:
                         block_duration_count = block_duration_not_na.sum()
                         logger.info(f"Used block_duration for {block_duration_count} row(s) where block_duration is not null")
                 
-                # Then, use stimulus_duration for all remaining rows where it exists
-                if 'stimulus_duration' in data.columns:
-                    # Check if block_duration is n/a (if it exists in data)
-                    if 'block_duration' in data.columns:
-                        block_duration_na = data['block_duration'].isna() | (data['block_duration'] == 'n/a') | (data['block_duration'] == '')
-                    else:
-                        # If block_duration doesn't exist, treat all rows as n/a
-                        block_duration_na = pd.Series([True] * len(data), index=data.index)
-                    
-                    # Check if stimulus_duration is not n/a
-                    stimulus_duration_col = data['stimulus_duration']
-                    stimulus_duration_not_na = stimulus_duration_col.notna() & (stimulus_duration_col != 'n/a') & (stimulus_duration_col != '')
-                    
-                    # Use stimulus_duration for rows where block_duration is n/a AND stimulus_duration is not n/a
-                    use_stimulus_duration_mask = block_duration_na & stimulus_duration_not_na
-                    
-                    if use_stimulus_duration_mask.any():
-                        # Replace duration with stimulus_duration for matching rows
-                        event_df.loc[use_stimulus_duration_mask, 'duration'] = data.loc[use_stimulus_duration_mask, 'stimulus_duration'].values
-                        stimulus_duration_count = use_stimulus_duration_mask.sum()
-                        logger.info(f"Used stimulus_duration for {stimulus_duration_count} rows where block_duration is n/a but stimulus_duration is available")
+                # TEMPORARILY COMMENTED OUT: use stimulus_duration for rows where block_duration is n/a (prefer over trial_duration)
+                # if 'stimulus_duration' in data.columns:
+                #     # Check if block_duration is n/a (if it exists in data)
+                #     if 'block_duration' in data.columns:
+                #         block_duration_na = data['block_duration'].isna() | (data['block_duration'] == 'n/a') | (data['block_duration'] == '')
+                #     else:
+                #         # If block_duration doesn't exist, treat all rows as n/a
+                #         block_duration_na = pd.Series([True] * len(data), index=data.index)
+                #     
+                #     # Check if stimulus_duration is not n/a
+                #     stimulus_duration_col = data['stimulus_duration']
+                #     stimulus_duration_not_na = stimulus_duration_col.notna() & (stimulus_duration_col != 'n/a') & (stimulus_duration_col != '')
+                #     
+                #     # Use stimulus_duration for rows where block_duration is n/a AND stimulus_duration is not n/a
+                #     # This will use stimulus_duration even if trial_duration is also not n/a
+                #     use_stimulus_duration_mask = block_duration_na & stimulus_duration_not_na
+                #     
+                #     if use_stimulus_duration_mask.any():
+                #         # Replace duration with stimulus_duration for matching rows
+                #         event_df.loc[use_stimulus_duration_mask, 'duration'] = data.loc[use_stimulus_duration_mask, 'stimulus_duration'].values
+                #         stimulus_duration_count = use_stimulus_duration_mask.sum()
+                #         logger.info(f"Used stimulus_duration for {stimulus_duration_count} rows where block_duration is n/a but stimulus_duration is available")
                 
-                # Finally, use trial_duration for remaining rows where both block_duration and stimulus_duration are n/a
+                # Use trial_duration for rows where block_duration is n/a (TEMPORARY: prefer trial_duration over stimulus_duration)
                 if 'trial_duration' in data.columns:
                     # Check if block_duration is n/a (if it exists in data)
                     if 'block_duration' in data.columns:
@@ -732,25 +748,22 @@ class EventFileProcessor:
                         # If block_duration doesn't exist, treat all rows as n/a
                         block_duration_na = pd.Series([True] * len(data), index=data.index)
                     
-                    # Check if stimulus_duration is n/a (if it exists in data)
-                    if 'stimulus_duration' in data.columns:
-                        stimulus_duration_na = data['stimulus_duration'].isna() | (data['stimulus_duration'] == 'n/a') | (data['stimulus_duration'] == '')
-                    else:
-                        # If stimulus_duration doesn't exist, treat all rows as n/a
-                        stimulus_duration_na = pd.Series([True] * len(data), index=data.index)
-                    
                     # Check if trial_duration is not n/a
                     trial_duration_col = data['trial_duration']
                     trial_duration_not_na = trial_duration_col.notna() & (trial_duration_col != 'n/a') & (trial_duration_col != '')
                     
-                    # Use trial_duration for rows where both block_duration and stimulus_duration are n/a AND trial_duration is not n/a
-                    use_trial_duration_mask = block_duration_na & stimulus_duration_na & trial_duration_not_na
+                    # TEMPORARY: Use trial_duration for rows where block_duration is n/a AND trial_duration is not n/a
+                    # (This will use trial_duration even if stimulus_duration is also not n/a)
+                    use_trial_duration_mask = block_duration_na & trial_duration_not_na
                     
                     if use_trial_duration_mask.any():
                         # Replace duration with trial_duration for matching rows
                         event_df.loc[use_trial_duration_mask, 'duration'] = data.loc[use_trial_duration_mask, 'trial_duration'].values
                         trial_duration_count = use_trial_duration_mask.sum()
-                        logger.info(f"Used trial_duration for {trial_duration_count} rows where both block_duration and stimulus_duration are n/a but trial_duration is available")
+                        logger.info(f"Used trial_duration for {trial_duration_count} rows where block_duration is n/a but trial_duration is available")
+                
+                # Adjust test_trial rows to use stimulus_duration and insert blank_screen rows
+                event_df = self._adjust_test_trial_events(event_df, data, task_name)
             
             # Special processing for span tasks - SKIP unfurling for main file
             # For opSpan and simpleSpan, we skip the unfurling logic in the main file
@@ -815,6 +828,10 @@ class EventFileProcessor:
                 if partial_acc_calculated > 0:
                     logger.info(f"Calculated partial accuracy for {partial_acc_calculated} {task_name} span_recall rows")
             
+            # Ensure operation trial durations align with response_time for span tasks
+            if task_name in {'opSpan', 'opOnlySpan'}:
+                event_df = self._set_operation_duration_to_response_time(event_df)
+            
             # Convert onset from milliseconds to seconds and normalize to trigger start
             # For span tasks, we skip onset recalculation since we're not unfurling
             float_precision = output_settings.get('float_precision', 5)  # Default to 5 if not specified
@@ -843,6 +860,21 @@ class EventFileProcessor:
                 event_df = apply_cuedts_condition_mappings(event_df)
             
             # Standardize all empty/null values to 'n/a' format
+            if task_name == 'spatialTS' and 'trial_id' in event_df.columns:
+                replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation'}
+                before_counts = event_df['trial_id'].isin(replacements.keys()).sum()
+                if before_counts:
+                    event_df['trial_id'] = event_df['trial_id'].replace(replacements)
+                    logger.info(f"Renamed {before_counts} spatialTS trial_id values (test_cue/test_ITI) to blank_screen/fixation")
+
+            if task_name == 'nBack' and 'trial_id' in event_df.columns:
+                trial_replacements = {'test_trial': 'probe'}
+                replaced = event_df['trial_id'].isin(trial_replacements.keys()).sum()
+                if replaced:
+                    event_df['trial_id'] = event_df['trial_id'].replace(trial_replacements)
+                    logger.info(f"Renamed {replaced} nBack trial_id value(s) from 'test_trial' to 'probe'")
+
+            event_df = self._strip_test_prefix_from_trial_id(event_df)
             event_df = self._standardize_na_values(event_df)
             
             # Set trial_type to "exit_fullscreen" for the last row
@@ -1082,6 +1114,228 @@ class EventFileProcessor:
         
         return event_df
     
+    def _adjust_test_trial_events(self, event_df, data, task_name):
+        """
+        Ensure test_trial rows use stimulus_duration and insert trailing blank_screen rows.
+        
+        Args:
+            event_df (pd.DataFrame): Event dataframe under construction
+            data (pd.DataFrame): Original input dataframe (aligned with event_df indices)
+            task_name (str): Name of the task being processed
+        
+        Returns:
+            pd.DataFrame: Updated dataframe with test_trial adjustments applied
+        """
+        # Skip span tasks that rely on downstream unfurling logic
+        if task_name in {'opSpan', 'simpleSpan', 'opOnlySpan'}:
+            return event_df
+        
+        if 'trial_id' not in event_df.columns or 'duration' not in event_df.columns:
+            return event_df
+        
+        test_trial_mask = (event_df['trial_id'] == 'test_trial')
+        valid_mask = pd.Series(False, index=event_df.index)
+        
+        # Use stimulus_duration for test_trial rows when available
+        if 'stimulus_duration' in data.columns and test_trial_mask.any():
+            stimulus_duration_series = pd.to_numeric(data['stimulus_duration'], errors='coerce')
+            stim_notna_mask = stimulus_duration_series.notna()
+            if stim_notna_mask.any():
+                valid_mask = test_trial_mask & stim_notna_mask
+                if valid_mask.any():
+                    event_df.loc[valid_mask, 'duration'] = stimulus_duration_series.loc[valid_mask].values
+                    logger.info(f"Set test_trial duration from stimulus_duration for {valid_mask.sum()} row(s)")
+        
+        # Default remaining test_trial rows to 1000 ms if stimulus_duration is unavailable
+        missing_duration_mask = test_trial_mask & ~valid_mask
+        if missing_duration_mask.any():
+            event_df.loc[missing_duration_mask, 'duration'] = 1000.0
+            logger.info(f"Set default test_trial duration (1000 ms) for {missing_duration_mask.sum()} row(s)")
+        
+        # Insert blank_screen rows after each test_trial with timing aligned to next event
+        if not (event_df['trial_id'] == 'test_trial').any():
+            return event_df
+        
+        event_df = event_df.reset_index(drop=True)
+        columns = event_df.columns.tolist()
+        rows = []
+        
+        blank_default_duration = 500.0  # milliseconds
+        
+        for idx in range(len(event_df)):
+            row = event_df.iloc[idx]
+            rows.append(row.to_dict())
+            
+            if row.get('trial_id') != 'test_trial':
+                continue
+            
+            blank_row = {col: 'n/a' for col in columns}
+            
+            test_onset = pd.to_numeric(row.get('onset'), errors='coerce')
+            test_duration = pd.to_numeric(row.get('duration'), errors='coerce')
+            if pd.isna(test_duration):
+                test_duration = 1000.0
+            
+            next_onset = None
+            if idx + 1 < len(event_df):
+                next_onset = pd.to_numeric(event_df.iloc[idx + 1].get('onset'), errors='coerce')
+            
+            if pd.isna(test_onset):
+                blank_start = 'n/a'
+                blank_duration = blank_default_duration
+            else:
+                desired_blank_start = test_onset + test_duration
+                blank_duration = blank_default_duration
+                
+                if pd.notna(next_onset):
+                    latest_start = next_onset - blank_duration
+                    if latest_start < test_onset:
+                        # Not enough room for full blank duration, squeeze to available gap
+                        blank_duration = max(next_onset - test_onset, 0.0)
+                        blank_start = test_onset
+                    else:
+                        blank_start = min(desired_blank_start, latest_start)
+                else:
+                    blank_start = desired_blank_start
+            
+            blank_row['onset'] = blank_start
+            blank_row['duration'] = blank_duration
+            blank_row['trial_id'] = 'blank_screen'
+            
+            if 'trial_type' in blank_row:
+                blank_row['trial_type'] = 'n/a'
+            
+            rows.append(blank_row)
+        
+        return pd.DataFrame(rows, columns=columns)
+    
+    def _set_operation_duration_to_response_time(self, event_df):
+        """
+        Set duration equal to response_time for operation trials when available.
+        """
+        required_cols = {'trial_type', 'duration', 'response_time'}
+        if not required_cols.issubset(event_df.columns):
+            return event_df
+        
+        operation_mask = (event_df['trial_type'] == 'operation')
+        if not operation_mask.any():
+            return event_df
+        
+        response_times = pd.to_numeric(event_df['response_time'], errors='coerce')
+        
+        valid_mask = operation_mask & response_times.notna()
+        if valid_mask.any():
+            event_df.loc[valid_mask, 'duration'] = response_times.loc[valid_mask].values
+            logger.info(f"Set operation trial duration from response_time for {valid_mask.sum()} row(s)")
+        
+        missing_mask = operation_mask & ~response_times.notna()
+        if missing_mask.any():
+            event_df.loc[missing_mask, 'duration'] = 'n/a'
+            logger.info(f"Set operation trial duration to 'n/a' due to missing response_time for {missing_mask.sum()} row(s)")
+        
+        return event_df
+    
+    def _strip_test_prefix_from_trial_id(self, event_df):
+        """
+        Remove leading 'test_' prefix from trial_id values if present.
+        """
+        if 'trial_id' not in event_df.columns:
+            return event_df
+        
+        trial_id_series = event_df['trial_id']
+        if trial_id_series.dtype == object:
+            has_prefix = trial_id_series.astype(str).str.startswith('test_')
+            if has_prefix.any():
+                event_df.loc[has_prefix, 'trial_id'] = trial_id_series[has_prefix].astype(str).str[5:]
+                logger.info(f"Removed 'test_' prefix from {has_prefix.sum()} trial_id value(s)")
+        return event_df
+    
+    def _realign_test_trial_blank_sequences(self, event_df, float_precision=5):
+        """
+        Ensure blank_screen onsets follow test_trial onsets by specified durations.
+        
+        Enforces:
+            blank_screen_onset = test_trial_onset + (test_trial_duration / 1000)
+            next_event_onset = blank_screen_onset + (blank_screen_duration / 1000)
+        
+        Subsequent events are shifted by the same delta to preserve relative timing.
+        """
+        if not {'trial_id', 'onset', 'duration'}.issubset(event_df.columns):
+            return event_df
+        
+        onset_series = pd.to_numeric(event_df['onset'], errors='coerce')
+        duration_series = pd.to_numeric(event_df['duration'], errors='coerce')
+        
+        if onset_series.isna().all():
+            return event_df
+        
+        i = 0
+        while i < len(event_df) - 1:
+            if event_df.at[i, 'trial_id'] != 'test_trial':
+                i += 1
+                continue
+            
+            blank_idx = i + 1
+            if blank_idx >= len(event_df) or event_df.at[blank_idx, 'trial_id'] != 'blank_screen':
+                i += 1
+                continue
+            
+            test_onset = onset_series.iat[i]
+            if pd.isna(test_onset):
+                i = blank_idx + 1
+                continue
+            
+            test_duration_ms = duration_series.iat[i] if pd.notna(duration_series.iat[i]) else 1000.0
+            blank_duration_ms = duration_series.iat[blank_idx] if pd.notna(duration_series.iat[blank_idx]) else 500.0
+            test_duration_sec = test_duration_ms / 1000.0
+            blank_duration_sec = blank_duration_ms / 1000.0
+            
+            desired_blank_start = test_onset + test_duration_sec
+            next_idx = blank_idx + 1
+            next_onset = onset_series.iat[next_idx] if next_idx < len(event_df) else None
+            
+            if pd.notna(next_onset):
+                available_gap = next_onset - test_onset
+                if available_gap <= 0:
+                    blank_start = test_onset
+                    blank_duration_sec_adj = 0.0
+                else:
+                    blank_duration_sec_adj = min(blank_duration_sec, available_gap)
+                    latest_start = next_onset - blank_duration_sec_adj
+                    blank_start = min(max(test_onset, latest_start), desired_blank_start)
+            else:
+                blank_start = desired_blank_start
+                blank_duration_sec_adj = blank_duration_sec
+            
+            blank_duration_ms_adj = max(blank_duration_sec_adj * 1000.0, 0.0)
+            onset_series.iat[blank_idx] = round(blank_start, float_precision)
+            duration_series.iat[blank_idx] = blank_duration_ms_adj
+            
+            i = blank_idx + 1
+        
+        event_df['onset'] = onset_series.round(float_precision)
+        event_df['duration'] = duration_series
+        return event_df
+    
+    def _sort_events_by_onset(self, event_df):
+        """
+        Sort events (except the first row) by onset to ensure non-decreasing order.
+        """
+        if 'onset' not in event_df.columns or len(event_df) <= 1:
+            return event_df
+        
+        onset_numeric = pd.to_numeric(event_df['onset'], errors='coerce')
+        if onset_numeric.isna().all():
+            return event_df
+        
+        first_row = event_df.iloc[[0]]
+        remaining = event_df.iloc[1:].copy()
+        remaining['_onset_numeric'] = onset_numeric.iloc[1:].values
+        remaining = remaining.sort_values(by='_onset_numeric', kind='mergesort', na_position='last')
+        remaining = remaining.drop(columns=['_onset_numeric'])
+        
+        return pd.concat([first_row, remaining], ignore_index=True)
+    
     def _normalize_onsets_to_trigger_start(self, event_df, output_path, float_precision=5):
         """
         Normalize onset timing by converting milliseconds to seconds and setting trigger_start as time zero.
@@ -1167,6 +1421,11 @@ class EventFileProcessor:
             new_order = [trigger_end_idx] + other_indices
             event_df = event_df.iloc[new_order].reset_index(drop=True)
             logger.info(f"Reordered rows: fmri_wait_block_trigger_end is now first row")
+
+        # Realign test_trial/blank_screen sequences to maintain desired spacing
+        event_df = self._realign_test_trial_blank_sequences(event_df, float_precision=float_precision)
+        # Sort remaining rows by onset to keep non-decreasing timeline
+        event_df = self._sort_events_by_onset(event_df)
 
         logger.info(f"Onset normalization complete: removed {trigger_idx + 1} pre-trigger rows (including trigger_start), "
                    f"normalization reference = {normalization_reference:.3f}s (time_elapsed[trigger_start])")
