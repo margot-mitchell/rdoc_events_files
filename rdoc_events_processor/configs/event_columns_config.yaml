@@ -141,6 +141,10 @@ exclude_columns_by_task:
     - "duplicate_responses"
     - "extra_responses"
     - "correct_cell_order"
+    - "invalid_response_source"
+    - "cell_movement"
+    - "valid_cell_selection"
+    - "invalid_cell_selection"
   "simpleSpan":
     - "moving_through_grid_timestamps"
     - "cell_order_through_grid"
@@ -152,6 +156,10 @@ exclude_columns_by_task:
     - "extra_responses_timestamps"
     - "correct_cell_order"
     - "correct_navigation_response"
+    - "invalid_response_source"
+    - "cell_movement"
+    - "valid_cell_selection"
+    - "invalid_cell_selection"
 
 
 
