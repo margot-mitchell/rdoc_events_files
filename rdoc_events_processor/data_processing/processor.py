@@ -197,12 +197,12 @@ class EventFileProcessor:
                 event_df = self._adjust_test_trial_events(event_df, data, task_name)
                 
                 if task_name == 'spatialTS' and 'trial_id' in event_df.columns:
-                    replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation'}
+                    replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation_cross'}
                     event_df['trial_id'] = event_df['trial_id'].replace(replacements)
                 
                 # Spatial task switching: rename cue and ITI trial_ids for clarity
                 if task_name == 'spatialTS' and 'trial_id' in event_df.columns:
-                    replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation'}
+                    replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation_cross'}
                     event_df['trial_id'] = event_df['trial_id'].replace(replacements)
             
             # Special processing for span tasks - expand list columns (UNFURLING)
@@ -348,11 +348,14 @@ class EventFileProcessor:
             
             # Standardize all empty/null values to 'n/a' format
             if task_name == 'spatialTS' and 'trial_id' in event_df.columns:
-                replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation'}
+                replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation_cross'}
                 before_counts = event_df['trial_id'].isin(replacements.keys()).sum()
                 event_df['trial_id'] = event_df['trial_id'].replace(replacements)
                 if before_counts:
-                    logger.info(f"Renamed {before_counts} spatialTS trial_id values (test_cue/test_ITI) to blank_screen/fixation")
+                    logger.info(f"Renamed {before_counts} spatialTS trial_id values (test_cue/test_ITI) to blank_screen/fixation_cross")
+
+            if 'stimulus' in event_df.columns:
+                event_df = event_df.drop(columns=['stimulus'])
             
             event_df = self._strip_test_prefix_from_trial_id(event_df)
             event_df = self._standardize_na_values(event_df)
@@ -687,6 +690,9 @@ class EventFileProcessor:
             # Create DataFrame
             event_df = pd.DataFrame(event_data)
             
+            if task_name == 'nBack':
+                event_df = self._enforce_nback_trial_type(event_df)
+            
             # Add processing-only columns for span tasks (handled gracefully with .get() if missing)
             if task_name in ['opSpan', 'simpleSpan']:
                 # Common processing columns for both span tasks
@@ -858,28 +864,81 @@ class EventFileProcessor:
                 
                 # Apply condition mappings using the calculator function
                 event_df = apply_cuedts_condition_mappings(event_df)
+                
+                # Set stim_number to "n/a" for all rows where trial_id = "cue"
+                if 'trial_id' in event_df.columns and 'stim_number' in event_df.columns:
+                    # Check for both "cue" and "test_cue" since test prefix may not be stripped yet
+                    cue_mask = (event_df['trial_id'] == 'cue') | (event_df['trial_id'] == 'test_cue')
+                    if cue_mask.any():
+                        event_df.loc[cue_mask, 'stim_number'] = 'n/a'
+                        logger.info(f"Set stim_number to 'n/a' for {cue_mask.sum()} cue rows in cuedTS task")
             
             # Standardize all empty/null values to 'n/a' format
             if task_name == 'spatialTS' and 'trial_id' in event_df.columns:
-                replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation'}
+                replacements = {'test_cue': 'blank_screen', 'test_ITI': 'fixation_cross'}
                 before_counts = event_df['trial_id'].isin(replacements.keys()).sum()
                 if before_counts:
                     event_df['trial_id'] = event_df['trial_id'].replace(replacements)
-                    logger.info(f"Renamed {before_counts} spatialTS trial_id values (test_cue/test_ITI) to blank_screen/fixation")
+                    logger.info(f"Renamed {before_counts} spatialTS trial_id values (test_cue/test_ITI) to blank_screen/fixation_cross")
 
-            if task_name == 'nBack' and 'trial_id' in event_df.columns:
-                trial_replacements = {'test_trial': 'probe'}
-                replaced = event_df['trial_id'].isin(trial_replacements.keys()).sum()
-                if replaced:
-                    event_df['trial_id'] = event_df['trial_id'].replace(trial_replacements)
-                    logger.info(f"Renamed {replaced} nBack trial_id value(s) from 'test_trial' to 'probe'")
+            if task_name == 'spatialCueing' and 'trial_id' in event_df.columns:
+                cue_replacements = {'test_ITI': 'fixation_cross', 'test_CTI': 'fixation_cross'}
+                cue_counts = event_df['trial_id'].isin(cue_replacements.keys()).sum()
+                if cue_counts:
+                    event_df['trial_id'] = event_df['trial_id'].replace(cue_replacements)
+                    logger.info(f"Renamed {cue_counts} spatialCueing trial_id value(s) from test_ITI/test_CTI to fixation_cross")
+
+            if task_name == 'cuedTS' and 'trial_id' in event_df.columns:
+                cued_replacements = {'test_ITI': 'fixation_cross'}
+                cued_counts = event_df['trial_id'].isin(cued_replacements.keys()).sum()
+                if cued_counts:
+                    event_df['trial_id'] = event_df['trial_id'].replace(cued_replacements)
+                    logger.info(f"Renamed {cued_counts} cuedTS trial_id value(s) from test_ITI to fixation_cross")
+
+            if task_name in {'opSpan', 'opOnlySpan'} and 'trial_id' in event_df.columns:
+                interstim_mask = event_df['trial_id'] == 'test_inter-stimulus'
+                if interstim_mask.any():
+                    event_df.loc[interstim_mask, 'trial_id'] = 'trial'
+                    logger.info(f"Renamed {interstim_mask.sum()} {task_name} trial_id value(s) from 'test_inter-stimulus' to 'trial'")
+
+            if task_name == 'simpleSpan' and 'trial_id' in event_df.columns:
+                interstim_mask = event_df['trial_id'] == 'test_inter-stimulus'
+                if interstim_mask.any():
+                    event_df.loc[interstim_mask, 'trial_id'] = 'ITI_4_stars'
+                    logger.info(f"Renamed {interstim_mask.sum()} simpleSpan trial_id value(s) from 'test_inter-stimulus' to 'ITI_4_stars'")
+
+            if 'stimulus' in event_df.columns and 'trial_id' in event_df.columns:
+                fixation_string = '<div class = centerbox><div class = fixation>+</div></div>'
+                fixation_mask = event_df['stimulus'].astype(str) == fixation_string
+                if fixation_mask.any():
+                    event_df.loc[fixation_mask, 'trial_id'] = 'fixation_cross'
+                    logger.info(f"Set trial_id to 'fixation_cross' for {fixation_mask.sum()} row(s) based on stimulus markup")
+
+            if 'stimulus' in event_df.columns:
+                event_df = event_df.drop(columns=['stimulus'])
+
+            if task_name in {
+                'cuedTS', 'nBack', 'stroop', 'visualSearch', 'spatialTS',
+                'spatialCueing', 'goNogo', 'flanker', 'axCPT', 'stopSignal'
+            } and 'trial_id' in event_df.columns:
+                probe_mask = event_df['trial_id'] == 'test_trial'
+                if probe_mask.any():
+                    event_df.loc[probe_mask, 'trial_id'] = 'probe'
+                    logger.info(f"Renamed {probe_mask.sum()} {task_name} trial_id value(s) from 'test_trial' to 'probe'")
 
             event_df = self._strip_test_prefix_from_trial_id(event_df)
             event_df = self._standardize_na_values(event_df)
             
+            if task_name == 'nBack':
+                event_df = self._enforce_nback_trial_type(event_df)
+            
             # Set trial_type to "exit_fullscreen" for the last row
             if len(event_df) > 0 and 'trial_type' in event_df.columns:
                 event_df.iloc[-1, event_df.columns.get_loc('trial_type')] = 'exit_fullscreen'
+
+            if task_name == 'nBack' and 'trial_type' in event_df.columns:
+                match_counts = event_df['trial_type'].value_counts(dropna=False).to_dict()
+                logger.info(f"nBack trial_type distribution before save: {match_counts}")
             
             # Reorder columns: onset, duration, trial_type first, then all others alphabetically
             # This matches BIDS specification and test requirements
@@ -1203,7 +1262,7 @@ class EventFileProcessor:
             blank_row['trial_id'] = 'blank_screen'
             
             if 'trial_type' in blank_row:
-                blank_row['trial_type'] = 'n/a'
+                blank_row['trial_type'] = row.get('trial_type', 'n/a')
             
             rows.append(blank_row)
         
@@ -1248,6 +1307,46 @@ class EventFileProcessor:
             if has_prefix.any():
                 event_df.loc[has_prefix, 'trial_id'] = trial_id_series[has_prefix].astype(str).str[5:]
                 logger.info(f"Removed 'test_' prefix from {has_prefix.sum()} trial_id value(s)")
+        return event_df
+
+    def _enforce_nback_trial_type(self, event_df):
+        """
+        Normalize nBack trial_type values to 'match' or 'mismatch' based on letter comparison.
+
+        Comparison is case-insensitive and ignores leading/trailing whitespace.
+        """
+        required_cols = {'trial_type', 'current_letter', 'letter_to_match'}
+        if not required_cols.issubset(event_df.columns):
+            return event_df
+
+        trial_types = event_df['trial_type'].astype(str)
+        current_letters = event_df['current_letter'].astype(str)
+        match_letters = event_df['letter_to_match'].astype(str)
+
+        current_norm = current_letters.str.strip().str.lower()
+        match_norm = match_letters.str.strip().str.lower()
+
+        valid_mask = (
+            current_norm.str.len().gt(0)
+            & match_norm.str.len().gt(0)
+            & (current_norm != 'n/a')
+            & (match_norm != 'n/a')
+            & (current_norm != 'nan')
+            & (match_norm != 'nan')
+        )
+        matches = valid_mask & (current_norm == match_norm)
+        mismatches = valid_mask & ~matches
+
+        if matches.any() or mismatches.any():
+            trial_types.loc[matches] = 'match'
+            trial_types.loc[mismatches] = 'mismatch'
+            logger.info(
+                "Updated nBack trial_type: %d match row(s), %d mismatch row(s)",
+                matches.sum(),
+                mismatches.sum(),
+            )
+
+        event_df['trial_type'] = trial_types
         return event_df
     
     def _realign_test_trial_blank_sequences(self, event_df, float_precision=5):
@@ -1393,10 +1492,14 @@ class EventFileProcessor:
         
         # STEP 3: Recalculate onsets relative to normalization reference
         # Formula: onset[i] = time_elapsed[i-1] - normalization_reference
-        # Note: time_elapsed[i-1] refers to the previous row's time_elapsed value (in seconds)
+        # Note: time_elapsed[i] = when row i ENDED = when row i+1 will START
         # For the first row after trigger_start, we use trigger_start's time_elapsed as the previous row
+        # Special handling: If previous row is blank_screen (inserted, no raw time_elapsed),
+        # skip back to find the row before blank_screen and use its time_elapsed
         
         normalized_onsets = []
+        trial_id_series = event_df.get('trial_id', pd.Series())
+        
         for i in range(len(onset_seconds)):
             if i == 0:
                 # First row after trigger_start: use trigger_start's time_elapsed as previous
@@ -1404,8 +1507,26 @@ class EventFileProcessor:
                 normalized_time = prev_event_time - normalization_reference
                 normalized_onsets.append(normalized_time)
             else:
+                # Check if previous row is blank_screen (inserted row with no raw time_elapsed)
+                prev_idx = i - 1
+                if prev_idx >= 0 and trial_id_series.iloc[prev_idx] == 'blank_screen':
+                    # Skip blank_screen row(s) to find the actual previous row from raw data
+                    # Look back to find the row before blank_screen
+                    lookback_idx = prev_idx - 1
+                    while lookback_idx >= 0 and trial_id_series.iloc[lookback_idx] == 'blank_screen':
+                        lookback_idx -= 1
+                    
+                    if lookback_idx >= 0:
+                        # Use the row before blank_screen's time_elapsed
+                        prev_event_time = onset_seconds.iloc[lookback_idx]
+                    else:
+                        # Fallback: if we can't find a previous row, use trigger_start
+                        prev_event_time = normalization_reference
+                else:
+                    # Normal case: use previous row's time_elapsed
+                    prev_event_time = onset_seconds.iloc[i-1]
+                
                 # All subsequent rows: onset[i] = time_elapsed[i-1] - normalization_reference
-                prev_event_time = onset_seconds.iloc[i-1]
                 normalized_time = prev_event_time - normalization_reference
                 normalized_onsets.append(normalized_time)
         

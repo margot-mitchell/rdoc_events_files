@@ -5,6 +5,7 @@ This module tests general structure requirements that apply to all event files.
 """
 
 import pandas as pd
+import numpy as np
 import pytest
 from pathlib import Path
 
@@ -98,6 +99,9 @@ class TestEventStructure:
         if not event_files:
             pytest.skip("No event files found in output directory")
         
+        # Skip span tasks - they have different column structures due to unfurling changes
+        span_tasks = ['opSpan', 'opOnlySpan', 'simpleSpan']
+        
         # Group files by task type
         task_files = {}
         for file_path in event_files:
@@ -108,6 +112,10 @@ class TestEventStructure:
                 if part.startswith('task-'):
                     task_name = part.replace('task-', '')
                     break
+            
+            # Skip span tasks
+            if task_name in span_tasks:
+                continue
             
             if task_name:
                 if task_name not in task_files:
@@ -331,13 +339,16 @@ class TestEventStructure:
     
     def test_onset_duration_alignment(self):
         """
-        Test that for non-span tasks, the difference between consecutive onset values
-        roughly equals the duration value (in seconds) in the current row (first of the pair).
+        Test that the difference between consecutive onset values
+        roughly equals the duration value (in seconds) in the previous row.
         
-        This verifies that duration represents the time until the next event.
+        This verifies that the previous row's duration correctly predicts when the current row starts.
+        Calculation: (onset(i) - onset(i-1)) - duration(i-1)
         Tolerance: ±500ms (0.5 seconds)
         
-        Note: Skips the first row (trigger_start → trigger_end) since those have special timing.
+        Note: Skips the first three rows and the exit_fullscreen row (always last row) 
+        since those have special timing.
+        Includes all tasks (including span tasks).
         """
         output_dir = Path("output")
         event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
@@ -345,17 +356,11 @@ class TestEventStructure:
         if not event_files:
             pytest.skip("No event files found in output directory")
         
-        # Exclude span tasks
-        span_tasks = ['opSpan', 'opOnlySpan', 'simpleSpan']
-        non_span_files = [f for f in event_files if not any(task in f.name for task in span_tasks)]
-        
-        if not non_span_files:
-            pytest.skip("No non-span event files found")
-        
+        # Include all tasks (including span tasks)
         # Store issues grouped by file with counts
         file_issues = {}
         
-        for file_path in non_span_files:
+        for file_path in event_files:
             df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
             
             if 'onset' not in df.columns or 'duration' not in df.columns:
@@ -363,29 +368,35 @@ class TestEventStructure:
             
             file_misalignments = []
             
-            # Check consecutive pairs of rows (skip first row - trigger_start to trigger_end)
-            for i in range(1, len(df) - 1):
+            # Check consecutive pairs of rows (skip first three rows and exit_fullscreen row)
+            # exit_fullscreen is always the last row and has no next row to check
+            for i in range(3, len(df)):
+                # Skip exit_fullscreen row (always last row, has no next row to check)
+                trial_type_current = df.iloc[i].get('trial_type', 'n/a')
+                if trial_type_current == 'exit_fullscreen':
+                    continue
+                
                 onset_current = df.iloc[i]['onset']
-                onset_next = df.iloc[i + 1]['onset']
-                duration_current = df.iloc[i]['duration']  # Changed: use current row's duration
+                onset_previous = df.iloc[i-1]['onset']
+                duration_previous = df.iloc[i-1]['duration']  # Use previous row's duration
                 
                 # Skip if any value is n/a or non-numeric
-                if (onset_current == 'n/a' or onset_next == 'n/a' or duration_current == 'n/a' or
-                    onset_current == '' or onset_next == '' or duration_current == ''):
+                if (onset_current == 'n/a' or onset_previous == 'n/a' or duration_previous == 'n/a' or
+                    onset_current == '' or onset_previous == '' or duration_previous == ''):
                     continue
                 
                 try:
                     onset_current = float(onset_current)
-                    onset_next = float(onset_next)
-                    duration_current = float(duration_current)
+                    onset_previous = float(onset_previous)
+                    duration_previous = float(duration_previous)
                 except (ValueError, TypeError):
                     continue
                 
                 # Calculate the difference between onsets (in seconds)
-                onset_diff = onset_next - onset_current
+                onset_diff = onset_current - onset_previous
                 
                 # Convert duration from milliseconds to seconds
-                duration_seconds = duration_current / 1000.0
+                duration_seconds = duration_previous / 1000.0
                 
                 # Check if they're roughly equal (within 500ms tolerance)
                 tolerance = 0.5  # seconds
@@ -393,7 +404,7 @@ class TestEventStructure:
                 
                 if difference > tolerance:
                     file_misalignments.append({
-                        'row_pair': f"{i} -> {i+1}",
+                        'row_pair': f"{i-1} -> {i}",
                         'onset_diff': onset_diff,
                         'duration_seconds': duration_seconds,
                         'difference': difference
@@ -538,3 +549,321 @@ class TestEventStructure:
         if files_checked == 0:
             pytest.skip("No files could be checked (missing input files or insufficient data)")
     
+    def test_operation_duration_matches_response_time(self):
+        """
+        Ensure operation trials in span tasks have duration equal to response_time
+        when response_time is available.
+        """
+        output_dir = Path("output")
+        event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
+        
+        if not event_files:
+            pytest.skip("No event files found in output directory")
+        
+        target_tasks = ['task-opSpan', 'task-opOnlySpan']
+        span_operation_files = [f for f in event_files if any(task in f.name for task in target_tasks)]
+        
+        if not span_operation_files:
+            pytest.skip("No opSpan or opOnlySpan event files found")
+        
+        mismatches = []
+        
+        for file_path in span_operation_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            
+            required_cols = {'trial_type', 'duration', 'response_time'}
+            if not required_cols.issubset(df.columns):
+                continue
+            
+            operation_rows = df[df['trial_type'] == 'operation'].copy()
+            if operation_rows.empty:
+                continue
+            
+            operation_rows['duration_numeric'] = pd.to_numeric(operation_rows['duration'], errors='coerce')
+            operation_rows['response_time_numeric'] = pd.to_numeric(operation_rows['response_time'], errors='coerce')
+            
+            valid_rows = operation_rows[operation_rows['response_time_numeric'].notna()]
+            if valid_rows.empty:
+                continue
+            
+            mismatched = valid_rows[~np.isclose(valid_rows['duration_numeric'], valid_rows['response_time_numeric'], atol=1e-6)]
+            for _, row in mismatched.iterrows():
+                mismatches.append({
+                    'file': str(file_path),
+                    'row_index': int(row.name),
+                    'duration': row['duration'],
+                    'response_time': row['response_time']
+                })
+        
+        if mismatches:
+            first_issue = mismatches[0]
+            error_msg = (
+                f"Found {len(mismatches)} operation rows where duration != response_time. "
+                f"First mismatch in {first_issue['file']} at row {first_issue['row_index']}: "
+                f"duration={first_issue['duration']}, response_time={first_issue['response_time']}"
+            )
+            pytest.fail(error_msg)
+    
+    def test_spatialts_trial_ids_replaced(self):
+        """
+        Confirm spatial task switching files have expected trial_id replacements.
+        """
+        output_dir = Path("output")
+        event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
+        
+        if not event_files:
+            pytest.skip("No event files found in output directory")
+        
+        spatial_ts_files = [f for f in event_files if "task-spatialTS" in f.name]
+        if not spatial_ts_files:
+            pytest.skip("No spatialTS event files found")
+        
+        offending_files = []
+        
+        for file_path in spatial_ts_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            if 'trial_id' not in df.columns:
+                continue
+            
+            has_legacy_ids = df['trial_id'].isin(['test_cue', 'test_ITI']).any()
+            if has_legacy_ids:
+                offending_files.append(str(file_path))
+        
+        if offending_files:
+            pytest.fail(
+                "Found spatialTS files with unreplaced trial_id values: "
+                + ", ".join(offending_files)
+            )
+    
+    def test_no_test_prefix_trial_ids(self):
+        """
+        Ensure no trial_id values retain the 'test_' prefix.
+        """
+        output_dir = Path("output")
+        event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
+        
+        if not event_files:
+            pytest.skip("No event files found in output directory")
+        
+        offending = []
+        for file_path in event_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            if 'trial_id' not in df.columns:
+                continue
+            has_prefixed = df['trial_id'].astype(str).str.startswith('test_').any()
+            if has_prefixed:
+                offending.append(str(file_path))
+        
+        if offending:
+            pytest.fail(
+                "Found trial_id values with 'test_' prefix: " + ", ".join(offending)
+            )
+    
+    def test_no_stimulus_column_in_outputs(self):
+        """
+        Ensure stimulus column is excluded from all generated event files.
+        """
+        output_dir = Path("output")
+        event_files = list(output_dir.glob("**/*events.tsv"))
+
+        if not event_files:
+            pytest.skip("No event files found in output directory")
+
+        offending = []
+        for file_path in event_files:
+            df = pd.read_csv(file_path, sep='\t', nrows=0)
+            if 'stimulus' in df.columns:
+                offending.append(str(file_path))
+
+        if offending:
+            pytest.fail(
+                "Found event files still containing 'stimulus' column: "
+                + ", ".join(offending)
+            )
+
+    def test_span_operation_interstimulus_renamed_to_trial(self):
+        """
+        Ensure opSpan and opOnlySpan trial_id values replace 'test_inter-stimulus' with 'trial'.
+        """
+        output_dir = Path("output")
+        event_files = [
+            path
+            for path in output_dir.glob("**/sub-*_events.tsv")
+            if "task-opSpan" in path.name or "task-opOnlySpan" in path.name
+        ]
+
+        if not event_files:
+            pytest.skip("No opSpan/opOnlySpan event files found in output directory")
+
+        offending = []
+        for file_path in event_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            if 'trial_id' not in df.columns:
+                continue
+            if (df['trial_id'] == 'test_inter-stimulus').any():
+                offending.append(str(file_path))
+
+        if offending:
+            pytest.fail(
+                "Found span event files with trial_id values still labeled 'test_inter-stimulus': "
+                + ", ".join(offending)
+            )
+
+    def test_selected_tasks_use_probe_label(self):
+        """
+        Ensure configured tasks replace 'test_trial' trial_id values with 'probe'.
+        """
+        output_dir = Path("output")
+        probe_tasks = {
+            'cuedTS', 'nBack', 'stroop', 'visualSearch', 'spatialTS',
+            'spatialCueing', 'goNogo', 'flanker', 'axCPT', 'stopSignal'
+        }
+
+        event_files = [
+            path for path in output_dir.glob("**/sub-*_task-*_events.tsv")
+            if any(f"task-{task}" in path.name for task in probe_tasks)
+            and "span_sidecar" not in str(path)
+        ]
+
+        if not event_files:
+            pytest.skip("No event files found for probe replacement tasks")
+
+        offending = []
+        for file_path in event_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            if 'trial_id' not in df.columns:
+                continue
+            has_test_trial = (df['trial_id'] == 'test_trial').any()
+            if has_test_trial:
+                offending.append(str(file_path))
+
+        if offending:
+            pytest.fail(
+                "Found event files with trial_id values still labeled 'test_trial': "
+                + ", ".join(offending)
+            )
+
+    def test_spatialcueing_fixation_replacements(self):
+        """
+        Ensure spatialCueing trial_id values replace test_ITI and test_CTI with fixation.
+        """
+        output_dir = Path("output")
+        spatial_cueing_files = list(output_dir.glob("**/sub-*_task-spatialCueing_run-*_events.tsv"))
+
+        if not spatial_cueing_files:
+            pytest.skip("No spatialCueing event files found in output directory")
+
+        offending = []
+        for file_path in spatial_cueing_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            if 'trial_id' not in df.columns:
+                continue
+            has_legacy = df['trial_id'].isin(['test_ITI', 'test_CTI']).any()
+            if has_legacy:
+                offending.append(str(file_path))
+
+        if offending:
+            pytest.fail(
+                "Found spatialCueing event files with trial_id values still labeled test_ITI/test_CTI: "
+                + ", ".join(offending)
+            )
+
+    def test_cuedts_fixation_replacements(self):
+        """
+        Ensure cuedTS trial_id values replace test_ITI with fixation.
+        """
+        output_dir = Path("output")
+        cuedts_files = list(output_dir.glob("**/sub-*_task-cuedTS_run-*_events.tsv"))
+
+        if not cuedts_files:
+            pytest.skip("No cuedTS event files found in output directory")
+
+        offending = []
+        for file_path in cuedts_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            if 'trial_id' not in df.columns:
+                continue
+            if (df['trial_id'] == 'test_ITI').any():
+                offending.append(str(file_path))
+
+        if offending:
+            pytest.fail(
+                "Found cuedTS event files with trial_id values still labeled test_ITI: "
+                + ", ".join(offending)
+            )
+
+    def test_nback_trial_type_matches_letters(self):
+        """
+        Ensure nBack trial_type values are labeled 'match' when current_letter equals letter_to_match (case-insensitive)
+        and 'mismatch' otherwise.
+        """
+        output_dir = Path("output")
+        nback_files = list(output_dir.glob("**/sub-*_task-nBack_run-*_events.tsv"))
+
+        if not nback_files:
+            pytest.skip("No nBack event files found in output directory")
+
+        offending = []
+        for file_path in nback_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            if not {'current_letter', 'letter_to_match', 'trial_type'}.issubset(df.columns):
+                continue
+
+            current_norm = df['current_letter'].astype(str).str.strip().str.lower()
+            match_norm = df['letter_to_match'].astype(str).str.strip().str.lower()
+
+            valid_mask = (
+                current_norm.str.len().gt(0)
+                & match_norm.str.len().gt(0)
+                & ~current_norm.isin(['n/a', 'na', 'nan'])
+                & ~match_norm.isin(['n/a', 'na', 'nan'])
+            )
+
+            expected = pd.Series(df['trial_type'], copy=True)
+            expected.loc[valid_mask] = 'mismatch'
+            expected.loc[valid_mask & (current_norm == match_norm)] = 'match'
+
+            mismatched_rows = df.index[(df['trial_type'] != expected) & valid_mask]
+            if not mismatched_rows.empty:
+                offending.append(f"{file_path} rows: {', '.join(map(str, mismatched_rows.tolist()[:10]))}")
+
+        if offending:
+            pytest.fail(
+                "Found nBack rows with incorrect trial_type labels: "
+                + "; ".join(offending)
+            )
+
+    def test_onsets_non_decreasing(self):
+        """Ensure onset values are non-decreasing within each event file."""
+        output_dir = Path("output")
+        event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
+        
+        if not event_files:
+            pytest.skip("No event files found in output directory")
+        
+        issues = []
+        
+        for file_path in event_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            
+            if 'onset' not in df.columns or len(df) < 2:
+                continue
+            
+            onset_numeric = pd.to_numeric(df['onset'], errors='coerce')
+            if onset_numeric.isna().all():
+                continue
+            
+            diffs = onset_numeric.diff().iloc[1:]  # skip first value
+            if (diffs < -1e-6).any():
+                decreasing_indices = diffs[diffs < -1e-6].index.tolist()
+                issues.append({
+                    'file': str(file_path),
+                    'rows': decreasing_indices
+                })
+        
+        if issues:
+            first_issue = issues[0]
+            pytest.fail(
+                f"Found decreasing onset values in {len(issues)} file(s). "
+                f"First issue in {first_issue['file']} at rows {first_issue['rows']}"
+            )

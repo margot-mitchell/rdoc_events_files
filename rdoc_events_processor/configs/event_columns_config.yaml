@@ -11,6 +11,7 @@ input_columns:
   "time_elapsed": "onset"   # Converts milliseconds to seconds, normalizes to trigger_start, and recalculates for span_recall sequences
   # PROCESSED FOR SOME TASKS: 
   "stimulus_duration": "duration"   # May be replaced with trial_duration (for test_trial rows) or block_duration (for fmri_wait_block_initial_end)
+  "stimulus": "stimulus"
   "rt": "response_time"   # Used in span task sequence onset recalculations (both opSpan and simpleSpan convert from ms to seconds before recalculation)
   "correct_trial": "acc"   # Recalculated for opSpan, simpleSpan, and opOnlySpan tasks based on task-specific logic
 
