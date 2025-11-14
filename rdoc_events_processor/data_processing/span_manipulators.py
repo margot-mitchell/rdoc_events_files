@@ -732,12 +732,11 @@ def calculate_partial_acc(event_df):
     Calculate partial accuracy for span_recall rows.
     
     For each span_recall row:
-    - If acc is 1.0, partial_acc = 1.0
-    - If valid_cell_selection != correct_cell but valid_cell_selection is in correct_cell_order list, partial_acc = 0.5
+    - If cell_selection is in correct_cell_order list, partial_acc = 1.0
     - Otherwise, partial_acc = 0.0
     
     Args:
-        event_df (pd.DataFrame): Event dataframe with trial_type, acc, valid_cell_selection, correct_cell, and correct_cell_order columns
+        event_df (pd.DataFrame): Event dataframe with trial_type, cell_selection, and correct_cell_order columns
         
     Returns:
         pd.DataFrame: Updated dataframe with partial_acc column set for span_recall rows
@@ -757,35 +756,26 @@ def calculate_partial_acc(event_df):
     
     # Process each span_recall row
     for idx in event_df[span_recall_mask].index:
-        acc = event_df.loc[idx, 'acc'] if 'acc' in event_df.columns else 'n/a'
         cell_selection = event_df.loc[idx, 'cell_selection'] if 'cell_selection' in event_df.columns else 'n/a'
-        correct_cell = event_df.loc[idx, 'correct_cell'] if 'correct_cell' in event_df.columns else 'n/a'
         correct_cell_order_str = event_df.loc[idx, 'correct_cell_order'] if 'correct_cell_order' in event_df.columns else ''
         
-        # If acc is 1.0, partial_acc = 1.0
-        if acc == '1.0':
-            event_df.loc[idx, 'partial_acc'] = '1.00'
-        else:
-            # Check if cell_selection is in correct_cell_order list
+        # Convert cell_selection to string for comparison
+        cell_str = str(cell_selection).strip() if cell_selection != 'n/a' and cell_selection != '' else None
+        
+        if cell_str and correct_cell_order_str:
+            # Parse correct_cell_order list
             correct_cell_order = parse_list_string(correct_cell_order_str)
             
-            # Convert cell_selection to string for comparison
-            cell_str = str(cell_selection).strip() if cell_selection != 'n/a' and cell_selection != '' else None
+            # Check if cell_selection is in the correct_cell_order list
+            cell_in_list = any(str(item).strip() == cell_str for item in correct_cell_order)
             
-            if cell_str and correct_cell_order:
-                # Check if cell_selection is in the correct_cell_order list
-                cell_in_list = any(str(item).strip() == cell_str for item in correct_cell_order)
-                
-                # Check if cell_selection != correct_cell
-                correct_str = str(correct_cell).strip() if correct_cell != 'n/a' and correct_cell != '' else None
-                not_equal = (correct_str is None or cell_str != correct_str)
-                
-                if cell_in_list and not_equal:
-                    event_df.loc[idx, 'partial_acc'] = '0.50'
-                else:
-                    event_df.loc[idx, 'partial_acc'] = '0.00'
+            if cell_in_list:
+                event_df.loc[idx, 'partial_acc'] = '1.00'
             else:
                 event_df.loc[idx, 'partial_acc'] = '0.00'
+        else:
+            # If cell_selection is n/a or correct_cell_order is missing, set to 0.0
+            event_df.loc[idx, 'partial_acc'] = '0.00'
     
     return event_df
 
