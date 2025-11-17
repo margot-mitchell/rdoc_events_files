@@ -238,6 +238,17 @@ class EventFileProcessor:
                 logger.info(f"Skipping unfurled sidecar file: {reason}")
                 return False
             
+            # Calculate accuracy for span_recall rows (before filtering)
+            if task_name in ['opSpan', 'simpleSpan']:
+                event_df = calculate_span_recall_acc(event_df)
+                
+                # Calculate accuracy for operation rows (opSpan only)
+                if task_name == 'opSpan':
+                    event_df = calculate_operation_acc(event_df)
+                
+                # Calculate partial accuracy for span_recall rows
+                event_df = calculate_partial_acc(event_df)
+            
             # Track sequences for JSON grouping (before filtering)
             sequences_found = []
             
@@ -323,6 +334,26 @@ class EventFileProcessor:
                         if span_rows_reordered > 0:
                             logger.info(f"Reordered {span_rows_reordered} span rows by onset in {len(sequences_found)} sequences in simpleSpan task")
             
+            # Mark movement rows before dropping columns (for sidecar JSON creation)
+            # Movement rows have moving_through_grid_timestamps set (even if cell_movement is n/a)
+            if 'moving_through_grid_timestamps' in event_df.columns:
+                event_df['_is_movement'] = (
+                    event_df['moving_through_grid_timestamps'].notna() & 
+                    (event_df['moving_through_grid_timestamps'] != '') & 
+                    (event_df['moving_through_grid_timestamps'] != 'n/a')
+                )
+            else:
+                event_df['_is_movement'] = False
+            
+            # Preserve cell_order_through_grid value for movement events before dropping
+            # This is needed when cell_movement is 'n/a' but cell_order_through_grid has the cell value
+            if 'cell_order_through_grid' in event_df.columns:
+                # Copy cell_order_through_grid to a temporary column that won't be dropped
+                # Use it as fallback for cell_movement when cell_movement is 'n/a'
+                event_df['_cell_order_backup'] = event_df['cell_order_through_grid']
+            else:
+                event_df['_cell_order_backup'] = 'n/a'
+            
             # Remove task-specific excluded columns AFTER span processing
             task_excluded_columns = self.config.get('exclude_columns_by_task', {}).get(task_name, [])
             for col in task_excluded_columns:
@@ -358,6 +389,14 @@ class EventFileProcessor:
                 event_df = event_df.drop(columns=['stimulus'])
             
             event_df = self._strip_test_prefix_from_trial_id(event_df)
+            
+            # Rename long_fixation to long_fixation_cross in trial_id
+            if 'trial_id' in event_df.columns:
+                long_fixation_mask = event_df['trial_id'] == 'long_fixation'
+                if long_fixation_mask.any():
+                    event_df.loc[long_fixation_mask, 'trial_id'] = 'long_fixation_cross'
+                    logger.info(f"Renamed {long_fixation_mask.sum()} trial_id value(s) from 'long_fixation' to 'long_fixation_cross'")
+            
             event_df = self._standardize_na_values(event_df)
             
             # Reorder columns: onset, duration, trial_type first, then all others alphabetically
@@ -430,6 +469,15 @@ class EventFileProcessor:
                     except (ValueError, TypeError):
                         return None
                 
+                def safe_int(val):
+                    if pd.isna(val) or val == 'n/a' or val == '':
+                        return None
+                    try:
+                        # Try to convert to int, handling float strings like "1.0"
+                        return int(float(val))
+                    except (ValueError, TypeError):
+                        return None
+                
                 def safe_str(val):
                     if pd.isna(val) or val == 'n/a' or val == '':
                         return None
@@ -462,29 +510,61 @@ class EventFileProcessor:
                                 cell_movement_str = safe_str(cell_movement_val)
                                 cell_selection_str = safe_str(get_field('cell_selection'))
                                 cell_selection_type_str = safe_str(get_field('cell_selection_type'))
+                                is_movement_flag = get_field('_is_movement')
+                                cell_order_backup = safe_str(get_field('_cell_order_backup'))
                                 
                                 # Determine cell: use cell_movement if available, otherwise cell_selection
+                                # For movement events, also check cell_order_backup as fallback
                                 cell_val = None
                                 if cell_movement_str is not None and cell_movement_str != 'n/a':
                                     cell_val = cell_movement_str
+                                elif cell_order_backup is not None and cell_order_backup != 'n/a' and cell_order_backup != '':
+                                    # Use cell_order_backup for movement events when cell_movement is missing
+                                    cell_val = cell_order_backup
                                 elif cell_selection_str is not None and cell_selection_str != 'n/a':
                                     cell_val = cell_selection_str
                                 
                                 # Determine event_type: priority is valid_response > invalid_response > movement > selection
+                                # Check if this row came from moving_through_grid_timestamps (movement event)
+                                # even if cell_movement is 'n/a' (can happen when cell_order is missing/misaligned)
+                                # Handle both pandas boolean and Python bool
+                                is_movement_flag_bool = bool(is_movement_flag) if is_movement_flag is not None else False
+                                has_cell_movement = (cell_movement_str is not None and cell_movement_str != 'n/a')
+                                
+                                # Also check: if row has response_time but no cell_selection and no cell_movement,
+                                # and cell_selection_type is 'n/a', it's likely a movement row
+                                response_time_val = get_field('response_time')
+                                has_response_time = (response_time_val is not None and 
+                                                   response_time_val != 'n/a' and 
+                                                   response_time_val != '')
+                                is_likely_movement = (has_response_time and 
+                                                     (cell_selection_str is None or cell_selection_str == 'n/a') and
+                                                     (cell_selection_type_str is None or cell_selection_type_str == 'n/a') and
+                                                     not has_cell_movement)
+                                
+                                is_movement = (is_movement_flag_bool or has_cell_movement or is_likely_movement)
+                                
                                 if cell_selection_type_str == 'valid':
                                     event_type = "valid_response"
                                 elif cell_selection_type_str in ['duplicate', 'extra']:
                                     event_type = "invalid_response"
-                                elif cell_movement_str is not None and cell_movement_str != 'n/a':
+                                elif is_movement:
                                     event_type = "movement"
                                 else:
                                     event_type = "selection"
                                 
                                 # Set extra and duplicate fields based on cell_selection_type
-                                # If cell_movement is not null, set both to null
+                                # If event_type is movement, set all to None (n/a)
                                 extra_val = None
                                 duplicate_val = None
-                                if cell_movement_str is None or cell_movement_str == 'n/a':
+                                valid_val = None
+                                
+                                # Check event_type first - if movement, all are None
+                                if event_type == "movement":
+                                    valid_val = None
+                                    extra_val = None
+                                    duplicate_val = None
+                                elif cell_movement_str is None or cell_movement_str == 'n/a':
                                     # cell_movement is null, so we can set extra/duplicate
                                     extra_val = 0.0
                                     duplicate_val = 0.0
@@ -492,23 +572,37 @@ class EventFileProcessor:
                                         duplicate_val = 1.0
                                     elif cell_selection_type_str == 'extra':
                                         extra_val = 1.0
-                                # else: extra_val and duplicate_val remain None (cell_movement is not null)
-                                
-                                # Determine valid field: 1.0 if from valid_responses, 0.0 if from duplicate/extra, null if cell_movement is not null
-                                valid_val = None
-                                if cell_movement_str is None or cell_movement_str == 'n/a':
-                                    # cell_movement is null, so set valid based on cell_selection_type
+                                    
+                                    # Determine valid field: 1.0 if from valid_responses, 0.0 if from duplicate/extra
                                     if cell_selection_type_str == 'valid':
                                         valid_val = 1.0
                                     elif cell_selection_type_str in ['duplicate', 'extra']:
                                         valid_val = 0.0
-                                # else: valid_val remains None (cell_movement is not null)
+                                # else: valid_val, extra_val, and duplicate_val remain None (cell_movement is not null)
+                                
+                                # Determine partial_acc: use calculated value for valid_response, n/a for movement or invalid_response
+                                # Convert to float for JSON sidecar (main TSV files keep as strings)
+                                partial_acc_val = None
+                                if event_type in ['movement', 'invalid_response']:
+                                    partial_acc_val = None  # n/a for movement or invalid_response
+                                else:
+                                    # Use the calculated partial_acc value from event_df, convert to float
+                                    partial_acc_field = get_field('partial_acc')
+                                    partial_acc_val = safe_float(partial_acc_field)
+                                
+                                # Convert acc to float for JSON sidecar (main TSV files keep as strings)
+                                acc_val = safe_float(get_field('acc'))
+                                
+                                # Convert cell and correct_cell to integers for JSON sidecar (main TSV files keep as strings)
+                                cell_int = safe_int(cell_val) if cell_val is not None else None
+                                correct_cell_int = safe_int(get_field('correct_cell'))
                                 
                                 row_data = {
                                     'event_type': event_type,
-                                    'cell': cell_val,
-                                    'correct_cell': safe_str(get_field('correct_cell')),
-                                    'acc': safe_str(get_field('acc')),
+                                    'cell': cell_int,
+                                    'correct_cell': correct_cell_int,
+                                    'acc': acc_val,
+                                    'partial_acc': partial_acc_val,
                                     'valid': valid_val,
                                     'extra': extra_val,
                                     'duplicate': duplicate_val,
@@ -1029,6 +1123,14 @@ class EventFileProcessor:
                     logger.info(f"Renamed {probe_mask.sum()} {task_name} trial_id value(s) from 'test_trial' to 'probe'")
 
             event_df = self._strip_test_prefix_from_trial_id(event_df)
+            
+            # Rename long_fixation to long_fixation_cross in trial_id
+            if 'trial_id' in event_df.columns:
+                long_fixation_mask = event_df['trial_id'] == 'long_fixation'
+                if long_fixation_mask.any():
+                    event_df.loc[long_fixation_mask, 'trial_id'] = 'long_fixation_cross'
+                    logger.info(f"Renamed {long_fixation_mask.sum()} trial_id value(s) from 'long_fixation' to 'long_fixation_cross'")
+            
             event_df = self._standardize_na_values(event_df)
             
             if task_name == 'nBack':

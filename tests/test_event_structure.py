@@ -344,10 +344,17 @@ class TestEventStructure:
         
         This verifies that the previous row's duration correctly predicts when the current row starts.
         Calculation: (onset(i) - onset(i-1)) - duration(i-1)
-        Tolerance: ±500ms (0.5 seconds)
+        Tolerance: ±100ms (0.1 seconds)
         
-        Note: Skips the first three rows and the exit_fullscreen row (always last row) 
-        since those have special timing.
+        Note: Skips the exit_fullscreen row (always last row) since it has no next row to check.
+        Skips pairs where the first row's trial_id is 'fixation_cross', 'fmri_wait_block_trigger_end', 
+        'long_fixation_cross', 'feedback', or 'ITI_4_stars', but only for specific subjects/sessions:
+        - s4, s5, s6, s8 (all sessions)
+        - s11 sessions 1-8
+        - s19 sessions 1-3
+        - s20 sessions 1-3
+        - s14 sessions 1-6
+        These sessions occurred before timing fix in expfactory output was implemented to address timing inaccuracies that affected longer events.
         Includes all tasks (including span tasks).
         """
         output_dir = Path("output")
@@ -366,11 +373,41 @@ class TestEventStructure:
             if 'onset' not in df.columns or 'duration' not in df.columns:
                 continue
             
+            # Extract subject and session from file path
+            # Path format: output/sub-sX/ses-Y/sub-sX_ses-Y_task-*_run-*_events.tsv
+            path_parts = str(file_path).split('/')
+            subject = None
+            session = None
+            for part in path_parts:
+                # Only extract from directory names (not filenames which contain dots)
+                if part.startswith('sub-') and '.' not in part:
+                    subject = part.replace('sub-', '')
+                elif part.startswith('ses-') and '.' not in part:
+                    session_str = part.replace('ses-', '')
+                    try:
+                        session = int(session_str)
+                    except ValueError:
+                        pass
+            
+            # Determine if this subject/session should skip certain trial_ids
+            should_skip_trial_ids = False
+            if subject in ['s4', 's5', 's6', 's8']:
+                # All sessions for these subjects
+                should_skip_trial_ids = True
+            elif subject == 's11' and session is not None and 1 <= session <= 8:
+                should_skip_trial_ids = True
+            elif subject == 's19' and session is not None and 1 <= session <= 3:
+                should_skip_trial_ids = True
+            elif subject == 's20' and session is not None and 1 <= session <= 3:
+                should_skip_trial_ids = True
+            elif subject == 's14' and session is not None and 1 <= session <= 6:
+                should_skip_trial_ids = True
+            
             file_misalignments = []
             
-            # Check consecutive pairs of rows (skip first three rows and exit_fullscreen row)
+            # Check consecutive pairs of rows (skip exit_fullscreen row)
             # exit_fullscreen is always the last row and has no next row to check
-            for i in range(3, len(df)):
+            for i in range(1, len(df)):
                 # Skip exit_fullscreen row (always last row, has no next row to check)
                 trial_type_current = df.iloc[i].get('trial_type', 'n/a')
                 if trial_type_current == 'exit_fullscreen':
@@ -392,19 +429,28 @@ class TestEventStructure:
                 except (ValueError, TypeError):
                     continue
                 
+                # Skip if first row of pair has certain trial_ids, but only for specific subjects/sessions
+                trial_id_previous = df.iloc[i-1].get('trial_id', 'n/a')
+                if should_skip_trial_ids and trial_id_previous in ['fixation_cross', 'fmri_wait_block_trigger_end', 
+                                                                   'long_fixation_cross', 'feedback', 'ITI_4_stars']:
+                    continue
+                
                 # Calculate the difference between onsets (in seconds)
                 onset_diff = onset_current - onset_previous
                 
                 # Convert duration from milliseconds to seconds
                 duration_seconds = duration_previous / 1000.0
                 
-                # Check if they're roughly equal (within 500ms tolerance)
-                tolerance = 0.5  # seconds
+                # Check if they're roughly equal (within 100ms tolerance)
+                tolerance = 0.1  # seconds
                 difference = abs(onset_diff - duration_seconds)
                 
                 if difference > tolerance:
+                    trial_id_current = df.iloc[i].get('trial_id', 'n/a')
                     file_misalignments.append({
                         'row_pair': f"{i-1} -> {i}",
+                        'trial_id_previous': trial_id_previous,
+                        'trial_id_current': trial_id_current,
                         'onset_diff': onset_diff,
                         'duration_seconds': duration_seconds,
                         'difference': difference
@@ -424,12 +470,13 @@ class TestEventStructure:
                 error_msg += f"  {file_path} ({len(issues)} misaligned row(s)):\n"
                 for issue in issues:
                     error_msg += f"    rows {issue['row_pair']}: "
+                    error_msg += f"trial_id(prev): {issue['trial_id_previous']}, trial_id(curr): {issue['trial_id_current']}, "
                     error_msg += f"Onset diff: {issue['onset_diff']:.3f}s, Duration: {issue['duration_seconds']:.3f}s, "
                     error_msg += f"Diff: {issue['difference']:.3f}s\n"
             
             if total_files > 20:
                 error_msg += f"  ... and {total_files - 20} more files\n"
-            error_msg += "\nDuration should represent time until next event (tolerance: ±500ms)"
+            error_msg += "\nDuration should represent time until next event (tolerance: ±100ms)"
             pytest.fail(error_msg)
     
     def test_trigger_end_first_row_onset_difference(self):
@@ -549,10 +596,13 @@ class TestEventStructure:
         if files_checked == 0:
             pytest.skip("No files could be checked (missing input files or insufficient data)")
     
-    def test_operation_duration_matches_response_time(self):
+    def test_operation_duration_matches_onset_difference(self):
         """
-        Ensure operation trials in span tasks have duration equal to response_time
-        when response_time is available.
+        Ensure operation trials in span tasks have duration equal to the difference
+        in normalized onsets between the next row and current row.
+        
+        Duration[i] = (onset[i+1] - onset[i]) * 1000 (in milliseconds)
+        where onset values are normalized (in seconds) after trigger_start normalization.
         """
         output_dir = Path("output")
         event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
@@ -571,7 +621,7 @@ class TestEventStructure:
         for file_path in span_operation_files:
             df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
             
-            required_cols = {'trial_type', 'duration', 'response_time'}
+            required_cols = {'trial_type', 'duration', 'onset'}
             if not required_cols.issubset(df.columns):
                 continue
             
@@ -579,28 +629,55 @@ class TestEventStructure:
             if operation_rows.empty:
                 continue
             
-            operation_rows['duration_numeric'] = pd.to_numeric(operation_rows['duration'], errors='coerce')
-            operation_rows['response_time_numeric'] = pd.to_numeric(operation_rows['response_time'], errors='coerce')
+            # Convert onsets and durations to numeric
+            df['onset_numeric'] = pd.to_numeric(df['onset'], errors='coerce')
+            df['duration_numeric'] = pd.to_numeric(df['duration'], errors='coerce')
             
-            valid_rows = operation_rows[operation_rows['response_time_numeric'].notna()]
-            if valid_rows.empty:
-                continue
-            
-            mismatched = valid_rows[~np.isclose(valid_rows['duration_numeric'], valid_rows['response_time_numeric'], atol=1e-6)]
-            for _, row in mismatched.iterrows():
-                mismatches.append({
-                    'file': str(file_path),
-                    'row_index': int(row.name),
-                    'duration': row['duration'],
-                    'response_time': row['response_time']
-                })
+            for idx, row in operation_rows.iterrows():
+                row_pos = df.index.get_loc(idx)
+                current_onset = df.loc[idx, 'onset_numeric']
+                current_duration = df.loc[idx, 'duration_numeric']
+                
+                # Skip if current onset or duration is missing
+                if pd.isna(current_onset) or pd.isna(current_duration):
+                    continue
+                
+                # Skip if trial_id is feedback, long_feedback, or fixation_cross
+                if 'trial_id' in df.columns:
+                    current_trial_id = df.loc[idx, 'trial_id']
+                    if current_trial_id in ['feedback', 'long_feedback', 'fixation_cross']:
+                        continue
+                
+                # Check if there's a next row
+                if row_pos + 1 < len(df):
+                    next_idx = df.index[row_pos + 1]
+                    next_onset = df.loc[next_idx, 'onset_numeric']
+                    
+                    if pd.notna(next_onset):
+                        # Calculate expected duration: (next_onset - current_onset) * 1000
+                        onset_diff_seconds = next_onset - current_onset
+                        expected_duration_ms = onset_diff_seconds * 1000.0
+                        
+                        # Check if duration matches (with tolerance for floating point precision)
+                        if not np.isclose(current_duration, expected_duration_ms, atol=0.1):
+                            mismatches.append({
+                                'file': str(file_path),
+                                'row_index': int(idx),
+                                'current_onset': current_onset,
+                                'next_onset': next_onset,
+                                'duration': current_duration,
+                                'expected_duration': expected_duration_ms,
+                                'difference': abs(current_duration - expected_duration_ms)
+                            })
         
         if mismatches:
             first_issue = mismatches[0]
             error_msg = (
-                f"Found {len(mismatches)} operation rows where duration != response_time. "
+                f"Found {len(mismatches)} operation rows where duration != (next_onset - current_onset) * 1000. "
                 f"First mismatch in {first_issue['file']} at row {first_issue['row_index']}: "
-                f"duration={first_issue['duration']}, response_time={first_issue['response_time']}"
+                f"onset={first_issue['current_onset']:.3f}, next_onset={first_issue['next_onset']:.3f}, "
+                f"duration={first_issue['duration']:.1f}, expected={first_issue['expected_duration']:.1f}, "
+                f"diff={first_issue['difference']:.1f}ms"
             )
             pytest.fail(error_msg)
     
@@ -867,3 +944,46 @@ class TestEventStructure:
                 f"Found decreasing onset values in {len(issues)} file(s). "
                 f"First issue in {first_issue['file']} at rows {first_issue['rows']}"
             )
+    
+    def test_no_negative_durations(self):
+        """Ensure duration values are never negative in event files."""
+        output_dir = Path("output")
+        event_files = list(output_dir.glob("**/sub-*_task-*_run-*_events.tsv"))
+        
+        if not event_files:
+            pytest.skip("No event files found in output directory")
+        
+        issues = []
+        
+        for file_path in event_files:
+            df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
+            
+            if 'duration' not in df.columns:
+                continue
+            
+            # Convert duration to numeric, treating 'n/a' as NaN
+            duration_numeric = pd.to_numeric(df['duration'], errors='coerce')
+            
+            # Find negative durations (excluding NaN values)
+            negative_mask = (duration_numeric < 0) & duration_numeric.notna()
+            if negative_mask.any():
+                negative_rows = df[negative_mask]
+                negative_durations = [
+                    (idx, duration_numeric.loc[idx])
+                    for idx in negative_rows.index
+                ]
+                issues.append({
+                    'file': str(file_path),
+                    'negative_durations': negative_durations
+                })
+        
+        if issues:
+            first_issue = issues[0]
+            error_msg = f"Found negative duration values in {len(issues)} file(s).\n"
+            error_msg += f"First issue in {first_issue['file']}:\n"
+            for row_idx, duration_val in first_issue['negative_durations'][:10]:  # Limit to first 10
+                error_msg += f"  Row {row_idx}: duration = {duration_val}\n"
+            if len(first_issue['negative_durations']) > 10:
+                error_msg += f"  ... and {len(first_issue['negative_durations']) - 10} more negative durations\n"
+            error_msg += "\nDuration values should always be non-negative (>= 0)."
+            pytest.fail(error_msg)

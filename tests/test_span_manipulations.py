@@ -14,120 +14,6 @@ from pathlib import Path
 class TestSpanManipulations:
     """Test class for span task manipulations."""
     
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain unfurled span_recall rows with cell_movement column")
-    def test_cell_order_in_cell_movement(self):
-        """
-        Test that for every list in the cell_order_through_grid column in the input file,
-        the items of each of those lists appear in the "cell_movement" column in the 
-        output file rows which have the item from the input moving_through_grid_timestamps 
-        item of the same index.
-        
-        Tests both opSpan and simpleSpan tasks.
-        """
-        # Find span input files in dropbox_bids
-        input_dir = Path("dropbox_bids")
-        span_input_files = list(input_dir.glob("**/*span*_rdoc__fmri.csv"))
-        
-        if not span_input_files:
-            pytest.skip("No span input files found in dropbox_bids")
-        
-        # Find corresponding output event files
-        output_dir = Path("output")
-        span_output_files = list(output_dir.glob("**/*Span*_events.tsv"))
-        
-        if not span_output_files:
-            pytest.skip("No span output event files found in output directory")
-        
-        # Test each file pair
-        for input_file in span_input_files:
-            # Find corresponding output file
-            # Extract subject and session numbers from input filename
-            input_stem = input_file.stem
-            subject_part = input_stem.split('_')[0]  # e.g., "sub-s4"
-            session_part = input_stem.split('_')[1]  # e.g., "ses-10"
-            run_part = input_stem.split('_')[2]      # e.g., "run-1"
-            
-            # Extract numbers and zero-pad them to match output format
-            subject_num = subject_part.replace('sub-s', '')
-            session_num = session_part.replace('ses-', '')
-            run_num = run_part.replace('run-', '')
-            
-            # Create expected output filename pattern
-            expected_subject = f"sub-s{subject_num.zfill(2)}"
-            expected_session = f"ses-{session_num.zfill(2)}"
-            expected_run = f"run-{run_num}"  # Don't zero-pad run number
-            
-            matching_output = None
-            for output_file in span_output_files:
-                if (expected_subject in output_file.name and 
-                    expected_session in output_file.name and 
-                    expected_run in output_file.name):
-                    # Check if the task types match
-                    input_task = input_file.name.lower()
-                    output_task = output_file.name.lower()
-                    
-                    # Map input task names to output task names
-                    if 'simple_span' in input_task and 'simplespan' in output_task:
-                        matching_output = output_file
-                        break
-                    elif 'operation_span' in input_task and 'opspan' in output_task:
-                        matching_output = output_file
-                        break
-                    elif 'operation_only_span' in input_task and 'oponlyspan' in output_task:
-                        matching_output = output_file
-                        break
-            
-            if not matching_output:
-                continue
-                
-            # Read the files
-            input_df = pd.read_csv(input_file, keep_default_na=False)
-            output_df = pd.read_csv(matching_output, sep='\t', keep_default_na=False)
-            
-            # Parse cell_order_through_grid and moving_through_grid_timestamps from input
-            for idx, row in input_df.iterrows():
-                # Only process rows where trial_id = "test_trial"
-                if row.get('trial_id') != 'test_trial':
-                    continue
-                    
-                cell_order_str = row.get('cell_order_through_grid', '')
-                moving_timestamps_str = row.get('moving_through_grid_timestamps', '')
-                
-                # Parse the lists
-                def parse_list(list_str):
-                    if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
-                        return []
-                    try:
-                        return ast.literal_eval(list_str) if isinstance(list_str, str) else []
-                    except:
-                        return []
-                
-                cell_order = parse_list(cell_order_str)
-                moving_timestamps = parse_list(moving_timestamps_str)
-                
-                # Only test if both lists are non-empty and have the same length
-                if cell_order and moving_timestamps and len(cell_order) == len(moving_timestamps):
-                    # For each item in cell_order, find the corresponding output row
-                    for i, cell_item in enumerate(cell_order):
-                        moving_timestamp = moving_timestamps[i]
-                        
-                        # Find output row with this moving_timestamp in response_time
-                        matching_rows = output_df[output_df['response_time'] == str(moving_timestamp)]
-                        
-                        if len(matching_rows) == 0:
-                            pytest.fail(
-                                f"Input file {input_file.name} row {idx}: Could not find output row with response_time={moving_timestamp} "
-                                f"for cell_order item {cell_item}"
-                            )
-                        
-                        # Check that the cell_movement column contains the cell_item
-                        cell_movement_values = matching_rows['cell_movement'].astype(str).tolist()
-                        if str(cell_item) not in cell_movement_values:
-                            pytest.fail(
-                                f"Input file {input_file.name} row {idx}: cell_order item {cell_item} not found in cell_movement column "
-                                f"for response_time={moving_timestamp}. Found cell_movement values: {cell_movement_values}"
-                            )
-
     def test_correct_cell_order_alignment(self):
         """
         Test that every item in each list in correct_cell_order from the input file 
@@ -292,19 +178,18 @@ class TestSpanManipulations:
                                     f"Expected {correct_item}, but found correct_cell_order values: {[row.get('correct_cell_order', '') for _, row in matching_rows.iterrows()]}"
                                 )
 
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain unfurled span_recall rows - unfurled data is in sidecar JSON files")
     def test_span_expansion_rules(self):
         """
         Test that span event files (opSpan and simpleSpan) follow the specific expansion rules:
         
-        1. For each row in dropbox_bids input where moving_through_grid_timestamps is not empty, 
-           there is a separate row for each item in that list (in the same order)
-        2. Each of those rows has the corresponding cell_order_through_grid item at the same index
-        3. For non-empty valid_responses_timestamps, duplicate_responses_timestamps, 
-           and extra_responses_timestamps, the output has a row for each item in those lists
+        For non-empty valid_responses_timestamps, duplicate_responses_timestamps, 
+        and extra_responses_timestamps, the output has a row for each item in those lists.
         
         Tests both opSpan and simpleSpan tasks.
         """
+        import ast
+        from pathlib import Path
+        
         # Find span input files in dropbox_bids
         input_dir = Path("dropbox_bids")
         span_input_files = list(input_dir.glob("**/*span*_rdoc__fmri.csv"))
@@ -319,8 +204,8 @@ class TestSpanManipulations:
         if not span_output_files:
             pytest.skip("No span output event files found in output directory")
         
-        # Test one file pair to start (can expand to all files later)
-        for input_file in span_input_files[:3]:  # Test first 3 files
+        # Test each file pair
+        for input_file in span_input_files:
             # Find corresponding output file
             subject = input_file.stem.split('_')[0]
             session = input_file.stem.split('_')[1]
@@ -341,76 +226,121 @@ class TestSpanManipulations:
                 continue
             
             # Read the files
-            input_df = pd.read_csv(input_file)
-            output_df = pd.read_csv(matching_output, sep='\t')
+            input_df = pd.read_csv(input_file, keep_default_na=False)
+            output_df = pd.read_csv(matching_output, sep='\t', keep_default_na=False)
             
-            # Parse list columns from input to understand expected expansion
-            total_expected_rows = 0
+            # Filter input to only rows after trigger (same filtering as processor does)
+            trigger_mask = input_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
+            if trigger_mask.any():
+                trigger_idx = input_df[trigger_mask].index[0]
+                input_df_filtered = input_df.loc[trigger_idx:]
+            else:
+                input_df_filtered = input_df  # No trigger found, use all rows
             
-            for idx, row in input_df.iterrows():
-                moving_timestamps_str = row.get('moving_through_grid_timestamps', '')
+            # Parse the lists
+            def parse_list(list_str):
+                if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
+                    return []
+                try:
+                    return ast.literal_eval(list_str) if isinstance(list_str, str) else []
+                except:
+                    return []
+            
+            # Normalize response_time for comparison
+            def normalize_response_time(rt):
+                if rt in ['n/a', '', 'nan', None]:
+                    return None
+                rt_str = str(rt)
+                try:
+                    if '.' in rt_str:
+                        rt_float = float(rt_str)
+                        if rt_float == int(rt_float):
+                            return str(int(rt_float))
+                    return rt_str
+                except (ValueError, TypeError):
+                    return rt_str
+            
+            output_df_normalized = output_df.copy()
+            output_df_normalized['response_time_norm'] = output_df_normalized['response_time'].apply(normalize_response_time)
+            
+            # Check each input row for proper expansion of response timestamps
+            for input_idx, row in input_df_filtered.iterrows():
                 valid_responses_str = row.get('valid_responses_timestamps', '')
                 duplicate_responses_str = row.get('duplicate_responses_timestamps', '')
                 extra_responses_str = row.get('extra_responses_timestamps', '')
                 
-                # Parse the lists
-                def parse_list(list_str):
-                    if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
-                        return []
-                    try:
-                        return ast.literal_eval(list_str) if isinstance(list_str, str) else []
-                    except:
-                        return []
-                
-                moving_timestamps = parse_list(moving_timestamps_str)
                 valid_responses = parse_list(valid_responses_str)
                 duplicate_responses = parse_list(duplicate_responses_str)
                 extra_responses = parse_list(extra_responses_str)
                 
-                # Count expected rows for this input row
-                expected_rows = 0
-                
-                # Rule 1 & 2: moving_through_grid_timestamps expansion
-                if moving_timestamps:
-                    expected_rows += len(moving_timestamps)
-                
-                # Rule 3: Additional response timestamps
-                if valid_responses:
-                    expected_rows += len(valid_responses)
-                if duplicate_responses:
-                    expected_rows += len(duplicate_responses)
-                if extra_responses:
-                    expected_rows += len(extra_responses)
-                
-                # If no list data, should have at least 1 row
-                if expected_rows == 0:
-                    expected_rows = 1
+                # Check valid_responses_timestamps
+                for timestamp in valid_responses:
+                    timestamp_str = str(timestamp)
+                    try:
+                        if '.' in timestamp_str:
+                            timestamp_float = float(timestamp_str)
+                            if timestamp_float == int(timestamp_float):
+                                timestamp_str = str(int(timestamp_float))
+                    except (ValueError, TypeError):
+                        pass
                     
-                total_expected_rows += expected_rows
-            
-            # Check that we have output rows (exact count validation is complex, so just check > 0)
-            assert len(output_df) > 0, f"Output {matching_output.name} should have at least one row"
-            
-            # Verify that output has at least as many rows as input (due to expansion)
-            # This is a basic check - full validation would require tracking all expansions
-            assert len(output_df) >= len(input_df), (
-                f"Output {matching_output.name} has {len(output_df)} rows, "
-                f"but input {input_file.name} has {len(input_df)} rows. "
-                f"Expected expansion to create more rows."
-            )
+                    matching_rows = output_df_normalized[output_df_normalized['response_time_norm'] == timestamp_str]
+                    if len(matching_rows) == 0:
+                        pytest.fail(
+                            f"Input file {input_file.name}, row {input_idx}: "
+                            f"Timestamp {timestamp_str} from valid_responses_timestamps does not appear in output.\n"
+                            f"Valid responses timestamps list: {valid_responses}"
+                        )
+                
+                # Check duplicate_responses_timestamps
+                for timestamp in duplicate_responses:
+                    timestamp_str = str(timestamp)
+                    try:
+                        if '.' in timestamp_str:
+                            timestamp_float = float(timestamp_str)
+                            if timestamp_float == int(timestamp_float):
+                                timestamp_str = str(int(timestamp_float))
+                    except (ValueError, TypeError):
+                        pass
+                    
+                    matching_rows = output_df_normalized[output_df_normalized['response_time_norm'] == timestamp_str]
+                    if len(matching_rows) == 0:
+                        pytest.fail(
+                            f"Input file {input_file.name}, row {input_idx}: "
+                            f"Timestamp {timestamp_str} from duplicate_responses_timestamps does not appear in output.\n"
+                            f"Duplicate responses timestamps list: {duplicate_responses}"
+                        )
+                
+                # Check extra_responses_timestamps
+                for timestamp in extra_responses:
+                    timestamp_str = str(timestamp)
+                    try:
+                        if '.' in timestamp_str:
+                            timestamp_float = float(timestamp_str)
+                            if timestamp_float == int(timestamp_float):
+                                timestamp_str = str(int(timestamp_float))
+                    except (ValueError, TypeError):
+                        pass
+                    
+                    matching_rows = output_df_normalized[output_df_normalized['response_time_norm'] == timestamp_str]
+                    if len(matching_rows) == 0:
+                        pytest.fail(
+                            f"Input file {input_file.name}, row {input_idx}: "
+                            f"Timestamp {timestamp_str} from extra_responses_timestamps does not appear in output.\n"
+                            f"Extra responses timestamps list: {extra_responses}"
+                        )
 
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain unfurled columns (cell_movement, valid_cell_selection, invalid_cell_selection) - unfurled data is in sidecar JSON files")
     def test_span_required_columns(self):
         """
         Test that span TSV output files have required columns.
         
         For opSpan: onset, duration, trial_id, trial_type, response_time, acc, 
                     spatial_location, correct_response, grid_symmetry, response,
-                    cell_movement, correct_cell, valid_cell_selection, invalid_cell_selection
+                    cell_selection, cell_selection_type, correct_cell, partial_acc
         
         For simpleSpan: onset, duration, trial_id, trial_type, response_time, acc, 
-                        spatial_location, correct_cell, cell_movement, response,
-                        valid_cell_selection, invalid_cell_selection
+                        spatial_location, correct_cell, cell_selection, cell_selection_type,
+                        response, partial_acc
         
         Tests both opSpan and simpleSpan tasks.
         """
@@ -425,13 +355,13 @@ class TestSpanManipulations:
         opspan_required = [
             'onset', 'duration', 'trial_id', 'trial_type', 'response_time', 'acc',
             'spatial_location', 'correct_response', 'grid_symmetry', 'response',
-            'cell_movement', 'correct_cell', 'valid_cell_selection', 'invalid_cell_selection'
+            'cell_selection', 'cell_selection_type', 'correct_cell', 'partial_acc'
         ]
         
         simplespan_required = [
             'onset', 'duration', 'trial_id', 'trial_type', 'response_time', 'acc',
-            'spatial_location', 'correct_cell', 'cell_movement', 'response',
-            'valid_cell_selection', 'invalid_cell_selection'
+            'spatial_location', 'correct_cell', 'cell_selection', 'cell_selection_type',
+            'response', 'partial_acc'
         ]
         
         missing_columns_files = []
@@ -534,12 +464,11 @@ class TestSpanManipulations:
 class TestSimpleSpanColumnValidation:
     """Test class for simpleSpan column validation."""
     
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain unfurled columns (cell_movement, valid_cell_selection, invalid_cell_selection) - unfurled data is in sidecar JSON files")
     def test_simple_span_required_columns(self):
         """
-        Test that simpleSpan output files have exactly these required columns:
+        Test that simpleSpan output files have required columns:
         onset, duration, trial_id, trial_type, response_time, acc, spatial_location,
-        correct_cell, cell_movement, response, valid_cell_selection, invalid_cell_selection
+        correct_cell, cell_selection, cell_selection_type, response, partial_acc
         """
         from pathlib import Path
         
@@ -560,10 +489,10 @@ class TestSimpleSpanColumnValidation:
             'acc',
             'spatial_location',
             'correct_cell',
-            'cell_movement',
+            'cell_selection',
+            'cell_selection_type',
             'response',
-            'valid_cell_selection',
-            'invalid_cell_selection'
+            'partial_acc'
         ]
         
         files_with_issues = []
@@ -574,47 +503,41 @@ class TestSimpleSpanColumnValidation:
             # Check for missing columns
             missing_columns = [col for col in required_columns if col not in df.columns]
             
-            # Check for extra columns (should have exactly these columns)
-            extra_columns = [col for col in df.columns if col not in required_columns]
-            
-            if missing_columns or extra_columns:
+            if missing_columns:
                 files_with_issues.append({
                     'file': str(file_path),
                     'missing_columns': missing_columns,
-                    'extra_columns': extra_columns,
                     'actual_columns': list(df.columns),
                     'expected_columns': required_columns
                 })
         
         if files_with_issues:
-            error_msg = "simpleSpan event files have incorrect columns:\n\n"
+            error_msg = "simpleSpan event files have missing required columns:\n\n"
             for file_info in files_with_issues:
                 error_msg += f"File: {file_info['file']}\n"
-                if file_info['missing_columns']:
-                    error_msg += f"  Missing columns: {file_info['missing_columns']}\n"
-                if file_info['extra_columns']:
-                    error_msg += f"  Extra columns: {file_info['extra_columns']}\n"
+                error_msg += f"  Missing columns: {file_info['missing_columns']}\n"
                 error_msg += f"  Actual columns ({len(file_info['actual_columns'])}): {file_info['actual_columns']}\n"
                 error_msg += f"  Expected columns ({len(file_info['expected_columns'])}): {file_info['expected_columns']}\n\n"
             
-            error_msg += f"All simpleSpan event files must have exactly these {len(required_columns)} columns: {required_columns}"
+            error_msg += f"All simpleSpan event files must have these {len(required_columns)} columns: {required_columns}"
             pytest.fail(error_msg)
         
         # If we get here, all files have the correct columns
-        assert True, f"All {len(simple_span_output_files)} simpleSpan files have the correct columns"
+        assert True, f"All {len(simple_span_output_files)} simpleSpan files have the required columns"
     
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain unfurled rows with timestamps in response_time - unfurled data is in sidecar JSON files")
     def test_span_timestamps_appear_in_response_time(self):
         """
-        Test that all timestamp values from input lists appear in response_time column of output.
+        Test that all timestamp values from response lists appear in response_time column of output.
         
         For both opSpan and simpleSpan, verify that every timestamp from:
-        - moving_through_grid_timestamps
         - valid_responses_timestamps  
         - extra_responses_timestamps
         - duplicate_responses_timestamps
         
         appears as a value in the response_time column of the output file.
+        
+        Note: moving_through_grid_timestamps are NOT checked because movement rows
+        are not unfurled in the main TSV files (they are only in sidecar JSON files).
         """
         import ast
         from pathlib import Path
@@ -667,8 +590,8 @@ class TestSimpleSpanColumnValidation:
                 continue
                 
             # Read the files
-            input_df = pd.read_csv(input_file)
-            output_df = pd.read_csv(matching_output, sep='\t')
+            input_df = pd.read_csv(input_file, keep_default_na=False)
+            output_df = pd.read_csv(matching_output, sep='\t', keep_default_na=False)
             
             # Filter input to only rows after trigger (same filtering as processor does)
             # Find trigger row
@@ -692,13 +615,12 @@ class TestSimpleSpanColumnValidation:
                     except:
                         return []
                 
-                moving_timestamps = parse_list(row.get('moving_through_grid_timestamps', ''))
+                # Skip moving_through_grid_timestamps - movement rows are not unfurled in main TSV files
                 valid_responses = parse_list(row.get('valid_responses_timestamps', ''))
                 extra_responses = parse_list(row.get('extra_responses_timestamps', ''))
                 duplicate_responses = parse_list(row.get('duplicate_responses_timestamps', ''))
                 
-                # Add all timestamps to the expected list
-                all_expected_timestamps.extend([str(t) for t in moving_timestamps])
+                # Add only response timestamps to the expected list (skip movement timestamps)
                 all_expected_timestamps.extend([str(t) for t in valid_responses])
                 all_expected_timestamps.extend([str(t) for t in extra_responses])
                 all_expected_timestamps.extend([str(t) for t in duplicate_responses])
@@ -739,13 +661,12 @@ class TestSimpleSpanColumnValidation:
                     f"Expected timestamps: {all_expected_timestamps}\n"
                     f"Found response_times: {response_times}"
                 )
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain valid_cell_selection column - unfurled data is in sidecar JSON files")
-    def test_simple_span_valid_responses_appear_in_valid_cell_selection(self):
+    def test_simple_span_valid_responses_appear_in_cell_selection(self):
         """
-        Test that all items from valid_responses lists in input appear in valid_cell_selection column of output.
+        Test that all items from valid_responses lists in input appear in cell_selection column of output.
         
         For simpleSpan, verify that every item from all valid_responses lists in the input file
-        appears as a value in the valid_cell_selection column of the output file.
+        appears as a value in the cell_selection column where cell_selection_type == 'valid'.
         """
         import ast
         from pathlib import Path
@@ -781,18 +702,27 @@ class TestSimpleSpanColumnValidation:
                 continue
                 
             # Read the files
-            input_df = pd.read_csv(input_file)
-            output_df = pd.read_csv(matching_output, sep='\t')
+            input_df = pd.read_csv(input_file, keep_default_na=False)
+            output_df = pd.read_csv(matching_output, sep='\t', keep_default_na=False)
+            
+            # Filter input to only rows after trigger (same filtering as processor does)
+            # Find trigger row
+            trigger_mask = input_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
+            if trigger_mask.any():
+                trigger_idx = input_df[trigger_mask].index[0]
+                input_df_filtered = input_df.loc[trigger_idx:]
+            else:
+                input_df_filtered = input_df  # No trigger found, use all rows
             
             # Check if valid_responses column exists in input
-            if 'valid_responses' not in input_df.columns:
+            if 'valid_responses' not in input_df_filtered.columns:
                 # No valid_responses column found, skip this file
                 continue
             
-            # Collect all expected valid response items from input
+            # Collect all expected valid response items from input (only after trigger)
             all_expected_valid_responses = []
             
-            for idx, row in input_df.iterrows():
+            for idx, row in input_df_filtered.iterrows():
                 valid_responses_str = row.get('valid_responses', '')
                 
                 # Parse the list
@@ -816,32 +746,54 @@ class TestSimpleSpanColumnValidation:
                 # No valid_responses lists found in input, skip this file
                 continue
             
-            # Get all valid_cell_selection values from output
-            valid_cell_selections = output_df['valid_cell_selection'].astype(str).tolist()
-            # Remove 'n/a' and empty values
-            valid_cell_selections = [item for item in valid_cell_selections if item not in ['n/a', '', 'nan']]
+            # Get all cell_selection values from output where cell_selection_type == 'valid'
+            valid_mask = output_df['cell_selection_type'] == 'valid'
+            valid_cell_selections_raw = output_df.loc[valid_mask, 'cell_selection'].tolist()
+            # Normalize values: convert to string and remove .0 if it's a float representation
+            valid_cell_selections = []
+            for item in valid_cell_selections_raw:
+                if item not in ['n/a', '', 'nan', None]:
+                    # Convert to string and normalize (e.g., '2.0' -> '2', '2' -> '2')
+                    item_str = str(item)
+                    try:
+                        # If it's a float string like '2.0', convert to int string '2'
+                        if '.' in item_str:
+                            item_float = float(item_str)
+                            if item_float == int(item_float):
+                                item_str = str(int(item_float))
+                    except (ValueError, TypeError):
+                        pass
+                    valid_cell_selections.append(item_str)
             
-            # Check that every expected valid response appears in valid_cell_selection
-            missing_valid_responses = []
+            # Normalize expected responses the same way
+            normalized_expected = []
             for expected_response in all_expected_valid_responses:
+                try:
+                    # Convert to int then back to string to normalize
+                    normalized_expected.append(str(int(float(expected_response))))
+                except (ValueError, TypeError):
+                    normalized_expected.append(str(expected_response))
+            
+            # Check that every expected valid response appears in cell_selection with cell_selection_type='valid'
+            missing_valid_responses = []
+            for expected_response in normalized_expected:
                 if expected_response not in valid_cell_selections:
                     missing_valid_responses.append(expected_response)
             
             if missing_valid_responses:
                 pytest.fail(
-                    f"Input file {input_file.name} has valid_responses items that don't appear in valid_cell_selection column:\n"
+                    f"Input file {input_file.name} has valid_responses items that don't appear in cell_selection column (where cell_selection_type='valid'):\n"
                     f"Missing valid_responses: {missing_valid_responses}\n"
                     f"Expected valid_responses: {all_expected_valid_responses}\n"
-                    f"Found valid_cell_selections: {valid_cell_selections}"
+                    f"Found cell_selection values (where cell_selection_type='valid'): {valid_cell_selections}"
                 )
     
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain invalid_cell_selection column - unfurled data is in sidecar JSON files")
-    def test_simple_span_extra_duplicate_responses_appear_in_invalid_cell_selection(self):
+    def test_simple_span_extra_duplicate_responses_appear_in_cell_selection(self):
         """
-        Test that all items from extra_responses and duplicate_responses lists in input appear in invalid_cell_selection column of output.
+        Test that all items from extra_responses and duplicate_responses lists in input appear in cell_selection column of output.
         
         For simpleSpan, verify that every item from all extra_responses and duplicate_responses lists in the input file
-        appears as a value in the invalid_cell_selection column of the output file.
+        appears as a value in the cell_selection column where cell_selection_type is 'extra' or 'duplicate'.
         """
         import ast
         from pathlib import Path
@@ -877,21 +829,30 @@ class TestSimpleSpanColumnValidation:
                 continue
                 
             # Read the files
-            input_df = pd.read_csv(input_file)
-            output_df = pd.read_csv(matching_output, sep='\t')
+            input_df = pd.read_csv(input_file, keep_default_na=False)
+            output_df = pd.read_csv(matching_output, sep='\t', keep_default_na=False)
+            
+            # Filter input to only rows after trigger (same filtering as processor does)
+            # Find trigger row
+            trigger_mask = input_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
+            if trigger_mask.any():
+                trigger_idx = input_df[trigger_mask].index[0]
+                input_df_filtered = input_df.loc[trigger_idx:]
+            else:
+                input_df_filtered = input_df  # No trigger found, use all rows
             
             # Check if extra_responses and/or duplicate_responses columns exist in input
-            extra_responses_exists = 'extra_responses' in input_df.columns
-            duplicate_responses_exists = 'duplicate_responses' in input_df.columns
+            extra_responses_exists = 'extra_responses' in input_df_filtered.columns
+            duplicate_responses_exists = 'duplicate_responses' in input_df_filtered.columns
             
             if not (extra_responses_exists or duplicate_responses_exists):
                 # No extra_responses or duplicate_responses columns found, skip this file
                 continue
             
-            # Collect all expected invalid response items from input
+            # Collect all expected invalid response items from input (only after trigger)
             all_expected_invalid_responses = []
             
-            for idx, row in input_df.iterrows():
+            for idx, row in input_df_filtered.iterrows():
                 # Parse the list
                 def parse_list(list_str):
                     if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
@@ -920,20 +881,43 @@ class TestSimpleSpanColumnValidation:
                 # No extra_responses or duplicate_responses lists found in input, skip this file
                 continue
             
-            # Get all invalid_cell_selection values from output
-            invalid_cell_selections = output_df['invalid_cell_selection'].astype(str).tolist()
-            # Remove 'n/a' and empty values
-            invalid_cell_selections = [item for item in invalid_cell_selections if item not in ['n/a', '', 'nan']]
+            # Get all cell_selection values from output where cell_selection_type is 'extra' or 'duplicate'
+            extra_duplicate_mask = output_df['cell_selection_type'].isin(['extra', 'duplicate'])
+            extra_duplicate_cell_selections_raw = output_df.loc[extra_duplicate_mask, 'cell_selection'].tolist()
+            # Normalize values: convert to string and remove .0 if it's a float representation
+            extra_duplicate_cell_selections = []
+            for item in extra_duplicate_cell_selections_raw:
+                if item not in ['n/a', '', 'nan', None]:
+                    # Convert to string and normalize (e.g., '2.0' -> '2', '2' -> '2')
+                    item_str = str(item)
+                    try:
+                        # If it's a float string like '2.0', convert to int string '2'
+                        if '.' in item_str:
+                            item_float = float(item_str)
+                            if item_float == int(item_float):
+                                item_str = str(int(item_float))
+                    except (ValueError, TypeError):
+                        pass
+                    extra_duplicate_cell_selections.append(item_str)
             
-            # Check that every expected invalid response appears in invalid_cell_selection
-            missing_invalid_responses = []
+            # Normalize expected responses the same way
+            normalized_expected = []
             for expected_response in all_expected_invalid_responses:
-                if expected_response not in invalid_cell_selections:
+                try:
+                    # Convert to int then back to string to normalize
+                    normalized_expected.append(str(int(float(expected_response))))
+                except (ValueError, TypeError):
+                    normalized_expected.append(str(expected_response))
+            
+            # Check that every expected invalid response appears in cell_selection with cell_selection_type='extra' or 'duplicate'
+            missing_invalid_responses = []
+            for expected_response in normalized_expected:
+                if expected_response not in extra_duplicate_cell_selections:
                     missing_invalid_responses.append(expected_response)
             
             if missing_invalid_responses:
                 # Build error message with column information
-                error_msg = f"Input file {input_file.name} has invalid response items that don't appear in invalid_cell_selection column:\n"
+                error_msg = f"Input file {input_file.name} has invalid response items that don't appear in cell_selection column (where cell_selection_type='extra' or 'duplicate'):\n"
                 error_msg += f"Columns checked: "
                 columns_checked = []
                 if extra_responses_exists:
@@ -943,206 +927,9 @@ class TestSimpleSpanColumnValidation:
                 error_msg += ", ".join(columns_checked) + "\n"
                 error_msg += f"Missing invalid_responses: {missing_invalid_responses}\n"
                 error_msg += f"Expected invalid_responses: {all_expected_invalid_responses}\n"
-                error_msg += f"Found invalid_cell_selections: {invalid_cell_selections}"
+                error_msg += f"Found cell_selection values (where cell_selection_type='extra' or 'duplicate'): {extra_duplicate_cell_selections}"
                 
                 pytest.fail(error_msg)
-    
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain cell_movement column - unfurled data is in sidecar JSON files")
-    def test_simple_span_cell_order_appears_in_cell_movement(self):
-        """
-        Test that all items from cell_order_through_grid lists in input appear in cell_movement column of output.
-        
-        For simpleSpan, verify that every item from all cell_order_through_grid lists in the input file
-        appears as a value in the cell_movement column of the output file.
-        """
-        import ast
-        from pathlib import Path
-        
-        # Find simpleSpan input files in dropbox_bids
-        input_dir = Path("dropbox_bids")
-        simple_span_input_files = list(input_dir.glob("**/*simple_span*_rdoc__fmri.csv"))
-        
-        if not simple_span_input_files:
-            pytest.skip("No simple_span input files found in dropbox_bids")
-        
-        # Find corresponding output event files
-        output_dir = Path("output")
-        simple_span_output_files = list(output_dir.glob("**/*simpleSpan*_events.tsv"))
-        
-        if not simple_span_output_files:
-            pytest.skip("No simpleSpan output event files found in output directory")
-        
-        # Test each file pair
-        for input_file in simple_span_input_files:
-            # Find corresponding output file
-            subject = input_file.stem.split('_')[0]  # e.g., "sub-s4"
-            session = input_file.stem.split('_')[1]  # e.g., "ses-1" 
-            run = input_file.stem.split('_')[2]      # e.g., "run-1"
-            
-            matching_output = None
-            for output_file in simple_span_output_files:
-                if subject in output_file.name and session in output_file.name and run in output_file.name:
-                    matching_output = output_file
-                    break
-            
-            if not matching_output:
-                continue
-                
-            # Read the files
-            input_df = pd.read_csv(input_file)
-            output_df = pd.read_csv(matching_output, sep='\t')
-            
-            # Check if cell_order_through_grid column exists in input
-            if 'cell_order_through_grid' not in input_df.columns:
-                # No cell_order_through_grid column found, skip this file
-                continue
-            
-            # Collect all expected cell order items from input
-            all_expected_cell_orders = []
-            
-            for idx, row in input_df.iterrows():
-                cell_order_str = row.get('cell_order_through_grid', '')
-                
-                # Parse the list
-                def parse_list(list_str):
-                    if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
-                        return []
-                    try:
-                        return ast.literal_eval(list_str) if isinstance(list_str, str) else []
-                    except:
-                        return []
-                
-                cell_order = parse_list(cell_order_str)
-                
-                # Add all cell order items to the expected list
-                all_expected_cell_orders.extend([str(item) for item in cell_order])
-            
-            # Remove duplicates and empty strings
-            all_expected_cell_orders = list(set([item for item in all_expected_cell_orders if item.strip()]))
-            
-            if not all_expected_cell_orders:
-                # No cell_order_through_grid lists found in input, skip this file
-                continue
-            
-            # Get all cell_movement values from output
-            cell_movements = output_df['cell_movement'].astype(str).tolist()
-            # Remove 'n/a' and empty values
-            cell_movements = [item for item in cell_movements if item not in ['n/a', '', 'nan']]
-            
-            # Check that every expected cell order appears in cell_movement
-            missing_cell_orders = []
-            for expected_cell_order in all_expected_cell_orders:
-                if expected_cell_order not in cell_movements:
-                    missing_cell_orders.append(expected_cell_order)
-            
-            if missing_cell_orders:
-                pytest.fail(
-                    f"Input file {input_file.name} has cell_order_through_grid items that don't appear in cell_movement column:\n"
-                    f"Missing cell_order_through_grid: {missing_cell_orders}\n"
-                    f"Expected cell_order_through_grid: {all_expected_cell_orders}\n"
-                    f"Found cell_movements: {cell_movements}"
-                )
-    
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain cell_movement column - unfurled data is in sidecar JSON files")
-    def test_simple_span_timestamps_cell_order_index_mapping(self):
-        """
-        Test that items from moving_through_grid_timestamps and cell_order_through_grid are mapped by index.
-        
-        For simpleSpan, verify that the nth-index item from moving_through_grid_timestamps appears in 
-        the response_time column in the same row as the nth-index item from cell_order_through_grid 
-        appears in the cell_movement column.
-        """
-        import ast
-        from pathlib import Path
-        
-        # Find simpleSpan input files in dropbox_bids
-        input_dir = Path("dropbox_bids")
-        simple_span_input_files = list(input_dir.glob("**/*simple_span*_rdoc__fmri.csv"))
-        
-        if not simple_span_input_files:
-            pytest.skip("No simple_span input files found in dropbox_bids")
-        
-        # Find corresponding output event files
-        output_dir = Path("output")
-        simple_span_output_files = list(output_dir.glob("**/*simpleSpan*_events.tsv"))
-        
-        if not simple_span_output_files:
-            pytest.skip("No simpleSpan output event files found in output directory")
-        
-        # Test each file pair
-        for input_file in simple_span_input_files:
-            # Find corresponding output file
-            subject = input_file.stem.split('_')[0]  # e.g., "sub-s4"
-            session = input_file.stem.split('_')[1]  # e.g., "ses-1" 
-            run = input_file.stem.split('_')[2]      # e.g., "run-1"
-            
-            matching_output = None
-            for output_file in simple_span_output_files:
-                if subject in output_file.name and session in output_file.name and run in output_file.name:
-                    matching_output = output_file
-                    break
-            
-            if not matching_output:
-                continue
-                
-            # Read the files
-            input_df = pd.read_csv(input_file)
-            output_df = pd.read_csv(matching_output, sep='\t')
-            
-            # Check if both required columns exist in input
-            if 'moving_through_grid_timestamps' not in input_df.columns or 'cell_order_through_grid' not in input_df.columns:
-                # Missing required columns, skip this file
-                continue
-            
-            # Parse the list
-            def parse_list(list_str):
-                if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
-                    return []
-                try:
-                    return ast.literal_eval(list_str) if isinstance(list_str, str) else []
-                except:
-                    return []
-            
-            # Check each input row for proper index mapping
-            for input_idx, input_row in input_df.iterrows():
-                timestamps_str = input_row.get('moving_through_grid_timestamps', '')
-                cell_order_str = input_row.get('cell_order_through_grid', '')
-                
-                timestamps = parse_list(timestamps_str)
-                cell_order = parse_list(cell_order_str)
-                
-                # Only test if both lists have the same length and are non-empty
-                if not timestamps or not cell_order or len(timestamps) != len(cell_order):
-                    continue
-                
-                # For each timestamp-cell_order pair, verify they appear in the same output row
-                for list_idx in range(len(timestamps)):
-                    timestamp = timestamps[list_idx]
-                    cell = cell_order[list_idx]
-                    
-                    timestamp_str = str(timestamp)
-                    cell_str = str(cell)
-                    
-                    # Find output rows where this timestamp appears in response_time
-                    timestamp_rows = output_df[output_df['response_time'].astype(str) == timestamp_str]
-                    
-                    # Find output rows where this cell appears in cell_movement
-                    cell_rows = output_df[output_df['cell_movement'].astype(str) == cell_str]
-                    
-                    # Check if they appear in the same row(s)
-                    matching_rows = timestamp_rows.merge(cell_rows, left_index=True, right_index=True, how='inner')
-                    
-                    if len(matching_rows) == 0:
-                        pytest.fail(
-                            f"Input file {input_file.name}, row {input_idx}: "
-                            f"Timestamp {timestamp_str} (index {list_idx} in moving_through_grid_timestamps) "
-                            f"and cell {cell_str} (index {list_idx} in cell_order_through_grid) "
-                            f"do not appear in the same output row.\n"
-                            f"Rows with timestamp {timestamp_str}: {len(timestamp_rows)}\n"
-                            f"Rows with cell {cell_str}: {len(cell_rows)}\n"
-                            f"Timestamp list: {timestamps}\n"
-                            f"Cell order list: {cell_order}"
-                        )
     
     def test_simple_span_valid_responses_timestamps_index_mapping(self):
         """
@@ -1150,7 +937,7 @@ class TestSimpleSpanColumnValidation:
         
         For simpleSpan, verify that the nth-index item from valid_response_timestamps appears in 
         the response_time column in the same row as the nth-index item from valid_responses 
-        appears in the valid_cell_selection column.
+        appears in the cell_selection column where cell_selection_type == 'valid'.
         """
         import ast
         from pathlib import Path
@@ -1186,11 +973,20 @@ class TestSimpleSpanColumnValidation:
                 continue
                 
             # Read the files
-            input_df = pd.read_csv(input_file)
-            output_df = pd.read_csv(matching_output, sep='\t')
+            input_df = pd.read_csv(input_file, keep_default_na=False)
+            output_df = pd.read_csv(matching_output, sep='\t', keep_default_na=False)
+            
+            # Filter input to only rows after trigger (same filtering as processor does)
+            # Find trigger row
+            trigger_mask = input_df.get('trial_id', pd.Series()) == 'fmri_wait_block_trigger_start'
+            if trigger_mask.any():
+                trigger_idx = input_df[trigger_mask].index[0]
+                input_df_filtered = input_df.loc[trigger_idx:]
+            else:
+                input_df_filtered = input_df  # No trigger found, use all rows
             
             # Check if both required columns exist in input
-            if 'valid_responses' not in input_df.columns or 'valid_response_timestamps' not in input_df.columns:
+            if 'valid_responses' not in input_df_filtered.columns or 'valid_response_timestamps' not in input_df_filtered.columns:
                 # Missing required columns, skip this file
                 continue
             
@@ -1204,7 +1000,8 @@ class TestSimpleSpanColumnValidation:
                     return []
             
             # Check each input row for proper index mapping
-            for input_idx, input_row in input_df.iterrows():
+            # Only check rows that would be in the output (after trigger)
+            for input_idx, input_row in input_df_filtered.iterrows():
                 valid_responses_str = input_row.get('valid_responses', '')
                 valid_timestamps_str = input_row.get('valid_response_timestamps', '')
                 
@@ -1223,11 +1020,63 @@ class TestSimpleSpanColumnValidation:
                     response_str = str(valid_response)
                     timestamp_str = str(timestamp)
                     
-                    # Find output rows where this timestamp appears in response_time
-                    timestamp_rows = output_df[output_df['response_time'].astype(str) == timestamp_str]
+                    # Normalize timestamp (convert to string, handle float representation)
+                    timestamp_str_normalized = timestamp_str
+                    try:
+                        if '.' in timestamp_str:
+                            timestamp_float = float(timestamp_str)
+                            if timestamp_float == int(timestamp_float):
+                                timestamp_str_normalized = str(int(timestamp_float))
+                    except (ValueError, TypeError):
+                        pass
                     
-                    # Find output rows where this response appears in valid_cell_selection
-                    response_rows = output_df[output_df['valid_cell_selection'].astype(str) == response_str]
+                    # Normalize response (convert to string, handle float representation)
+                    response_str_normalized = response_str
+                    try:
+                        if '.' in response_str:
+                            response_float = float(response_str)
+                            if response_float == int(response_float):
+                                response_str_normalized = str(int(response_float))
+                    except (ValueError, TypeError):
+                        pass
+                    
+                    # Find output rows where this timestamp appears in response_time
+                    # Normalize response_time values for comparison
+                    def normalize_response_time(rt):
+                        if rt in ['n/a', '', 'nan', None]:
+                            return None
+                        rt_str = str(rt)
+                        try:
+                            if '.' in rt_str:
+                                rt_float = float(rt_str)
+                                if rt_float == int(rt_float):
+                                    return str(int(rt_float))
+                            return rt_str
+                        except (ValueError, TypeError):
+                            return rt_str
+                    
+                    output_df_normalized = output_df.copy()
+                    output_df_normalized['response_time_norm'] = output_df_normalized['response_time'].apply(normalize_response_time)
+                    timestamp_rows = output_df_normalized[output_df_normalized['response_time_norm'] == timestamp_str_normalized]
+                    
+                    # Find output rows where this response appears in cell_selection with cell_selection_type='valid'
+                    # Normalize cell_selection values for comparison
+                    def normalize_cell_selection(cs):
+                        if cs in ['n/a', '', 'nan', None]:
+                            return None
+                        cs_str = str(cs)
+                        try:
+                            if '.' in cs_str:
+                                cs_float = float(cs_str)
+                                if cs_float == int(cs_float):
+                                    return str(int(cs_float))
+                            return cs_str
+                        except (ValueError, TypeError):
+                            return cs_str
+                    
+                    output_df_normalized['cell_selection_norm'] = output_df_normalized['cell_selection'].apply(normalize_cell_selection)
+                    valid_mask = (output_df_normalized['cell_selection_norm'] == response_str_normalized) & (output_df_normalized['cell_selection_type'] == 'valid')
+                    response_rows = output_df_normalized[valid_mask]
                     
                     # Check if they appear in the same row(s)
                     matching_rows = timestamp_rows.merge(response_rows, left_index=True, right_index=True, how='inner')
@@ -1237,9 +1086,9 @@ class TestSimpleSpanColumnValidation:
                             f"Input file {input_file.name}, row {input_idx}: "
                             f"Timestamp {timestamp_str} (index {list_idx} in valid_response_timestamps) "
                             f"and response {response_str} (index {list_idx} in valid_responses) "
-                            f"do not appear in the same output row.\n"
+                            f"do not appear in the same output row (where cell_selection_type='valid').\n"
                             f"Rows with timestamp {timestamp_str}: {len(timestamp_rows)}\n"
-                            f"Rows with response {response_str}: {len(response_rows)}\n"
+                            f"Rows with response {response_str} (cell_selection_type='valid'): {len(response_rows)}\n"
                             f"Valid responses list: {valid_responses}\n"
                             f"Valid timestamps list: {valid_timestamps}"
                         )
@@ -1444,242 +1293,6 @@ class TestSimpleSpanColumnValidation:
                             f"Duplicate timestamps list: {duplicate_timestamps}"
                         )
     
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain unfurled rows with correct_cell - unfurled data is in sidecar JSON files")
-    def test_simple_span_valid_timestamps_correct_cell_order_index_mapping(self):
-        """
-        Test that items from valid_responses_timestamps and correct_cell_order are mapped by index.
-        
-        For simpleSpan, when valid_responses_timestamps and correct_cell_order lists have the same length,
-        verify that the nth-index item from valid_responses_timestamps appears in the response_time column
-        in the same row as the nth-index item from correct_cell_order appears in the correct_cell column.
-        """
-        import ast
-        from pathlib import Path
-        
-        # Find simpleSpan input files in dropbox_bids
-        input_dir = Path("dropbox_bids")
-        simple_span_input_files = list(input_dir.glob("**/*simple_span*_rdoc__fmri.csv"))
-        
-        if not simple_span_input_files:
-            pytest.skip("No simple_span input files found in dropbox_bids")
-        
-        # Find corresponding output event files
-        output_dir = Path("output")
-        simple_span_output_files = list(output_dir.glob("**/*simpleSpan*_events.tsv"))
-        
-        if not simple_span_output_files:
-            pytest.skip("No simpleSpan output event files found in output directory")
-        
-        # Test each file pair
-        for input_file in simple_span_input_files:
-            # Find corresponding output file
-            subject = input_file.stem.split('_')[0]  # e.g., "sub-s4"
-            session = input_file.stem.split('_')[1]  # e.g., "ses-1" 
-            run = input_file.stem.split('_')[2]      # e.g., "run-1"
-            
-            matching_output = None
-            for output_file in simple_span_output_files:
-                if subject in output_file.name and session in output_file.name and run in output_file.name:
-                    matching_output = output_file
-                    break
-            
-            if not matching_output:
-                continue
-                
-            # Read the files
-            input_df = pd.read_csv(input_file)
-            output_df = pd.read_csv(matching_output, sep='\t')
-            
-            # Check if both required columns exist in input
-            if 'valid_responses_timestamps' not in input_df.columns or 'correct_cell_order' not in input_df.columns:
-                # Missing required columns, skip this file
-                continue
-            
-            # Parse the list
-            def parse_list(list_str):
-                if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
-                    return []
-                try:
-                    return ast.literal_eval(list_str) if isinstance(list_str, str) else []
-                except:
-                    return []
-            
-            # Check each input row for proper index mapping
-            for input_idx, input_row in input_df.iterrows():
-                valid_timestamps_str = input_row.get('valid_responses_timestamps', '')
-                correct_cell_order_str = input_row.get('correct_cell_order', '')
-                
-                valid_timestamps = parse_list(valid_timestamps_str)
-                correct_cell_order = parse_list(correct_cell_order_str)
-                
-                # Only test if both lists have the same length and are non-empty
-                if not valid_timestamps or not correct_cell_order or len(valid_timestamps) != len(correct_cell_order):
-                    continue
-                
-                # For each valid_timestamp-correct_cell pair, verify they appear in the same output row
-                for list_idx in range(len(valid_timestamps)):
-                    timestamp = valid_timestamps[list_idx]
-                    correct_cell = correct_cell_order[list_idx]
-                    
-                    timestamp_str = str(timestamp)
-                    correct_cell_str = str(correct_cell)
-                    
-                    # Find output rows where this timestamp appears in response_time
-                    timestamp_rows = output_df[output_df['response_time'].astype(str) == timestamp_str]
-                    
-                    # Find output rows where this correct_cell appears in correct_cell column
-                    correct_cell_rows = output_df[output_df['correct_cell'].astype(str) == correct_cell_str]
-                    
-                    # Check if they appear in the same row(s)
-                    matching_rows = timestamp_rows.merge(correct_cell_rows, left_index=True, right_index=True, how='inner')
-                    
-                    if len(matching_rows) == 0:
-                        pytest.fail(
-                            f"Input file {input_file.name}, row {input_idx}: "
-                            f"Timestamp {timestamp_str} (index {list_idx} in valid_responses_timestamps) "
-                            f"and correct_cell {correct_cell_str} (index {list_idx} in correct_cell_order) "
-                            f"do not appear in the same output row.\n"
-                            f"Rows with timestamp {timestamp_str}: {len(timestamp_rows)}\n"
-                            f"Rows with correct_cell {correct_cell_str}: {len(correct_cell_rows)}\n"
-                            f"Valid timestamps list: {valid_timestamps}\n"
-                            f"Correct cell order list: {correct_cell_order}"
-                        )
-    
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain unfurled rows with correct_cell - unfurled data is in sidecar JSON files")
-    def test_simple_span_correct_cell_order_longer_than_valid_timestamps(self):
-        """
-        Test that when correct_cell_order is longer than valid_responses_timestamps, 
-        the remaining correct_cell items appear with n/a in response_time.
-        
-        For simpleSpan, when correct_cell_order list is longer than valid_responses_timestamps list,
-        verify that:
-        1. Items at matching indices appear together in output rows
-        2. Remaining correct_cell_order items (beyond valid_responses_timestamps length) 
-           appear in output rows with 'n/a' in the response_time column
-        """
-        import ast
-        from pathlib import Path
-        
-        # Find simpleSpan input files in dropbox_bids
-        input_dir = Path("dropbox_bids")
-        simple_span_input_files = list(input_dir.glob("**/*simple_span*_rdoc__fmri.csv"))
-        
-        if not simple_span_input_files:
-            pytest.skip("No simple_span input files found in dropbox_bids")
-        
-        # Find corresponding output event files
-        output_dir = Path("output")
-        simple_span_output_files = list(output_dir.glob("**/*simpleSpan*_events.tsv"))
-        
-        if not simple_span_output_files:
-            pytest.skip("No simpleSpan output event files found in output directory")
-        
-        # Test each file pair
-        for input_file in simple_span_input_files:
-            # Find corresponding output file
-            subject = input_file.stem.split('_')[0]  # e.g., "sub-s4"
-            session = input_file.stem.split('_')[1]  # e.g., "ses-1" 
-            run = input_file.stem.split('_')[2]      # e.g., "run-1"
-            
-            matching_output = None
-            for output_file in simple_span_output_files:
-                if subject in output_file.name and session in output_file.name and run in output_file.name:
-                    matching_output = output_file
-                    break
-            
-            if not matching_output:
-                continue
-                
-            # Read the files
-            input_df = pd.read_csv(input_file)
-            output_df = pd.read_csv(matching_output, sep='\t')
-            
-            # Check if both required columns exist in input
-            if 'valid_responses_timestamps' not in input_df.columns or 'correct_cell_order' not in input_df.columns:
-                # Missing required columns, skip this file
-                continue
-            
-            # Parse the list
-            def parse_list(list_str):
-                if pd.isna(list_str) or list_str == '' or list_str == 'n/a':
-                    return []
-                try:
-                    return ast.literal_eval(list_str) if isinstance(list_str, str) else []
-                except:
-                    return []
-            
-            # Check each input row for proper handling of unequal list lengths
-            for input_idx, input_row in input_df.iterrows():
-                valid_timestamps_str = input_row.get('valid_responses_timestamps', '')
-                correct_cell_order_str = input_row.get('correct_cell_order', '')
-                
-                valid_timestamps = parse_list(valid_timestamps_str)
-                correct_cell_order = parse_list(correct_cell_order_str)
-                
-                # Only test if correct_cell_order is longer than valid_responses_timestamps
-                if (not valid_timestamps or not correct_cell_order or 
-                    len(correct_cell_order) <= len(valid_timestamps)):
-                    continue
-                
-                # Test matching indices (where both lists have items)
-                for list_idx in range(len(valid_timestamps)):
-                    timestamp = valid_timestamps[list_idx]
-                    correct_cell = correct_cell_order[list_idx]
-                    
-                    timestamp_str = str(timestamp)
-                    correct_cell_str = str(correct_cell)
-                    
-                    # Find output rows where this timestamp appears in response_time
-                    timestamp_rows = output_df[output_df['response_time'].astype(str) == timestamp_str]
-                    
-                    # Find output rows where this correct_cell appears in correct_cell column
-                    correct_cell_rows = output_df[output_df['correct_cell'].astype(str) == correct_cell_str]
-                    
-                    # Check if they appear in the same row(s)
-                    matching_rows = timestamp_rows.merge(correct_cell_rows, left_index=True, right_index=True, how='inner')
-                    
-                    if len(matching_rows) == 0:
-                        pytest.fail(
-                            f"Input file {input_file.name}, row {input_idx}: "
-                            f"Timestamp {timestamp_str} (index {list_idx} in valid_responses_timestamps) "
-                            f"and correct_cell {correct_cell_str} (index {list_idx} in correct_cell_order) "
-                            f"do not appear in the same output row.\n"
-                            f"Rows with timestamp {timestamp_str}: {len(timestamp_rows)}\n"
-                            f"Rows with correct_cell {correct_cell_str}: {len(correct_cell_rows)}\n"
-                            f"Valid timestamps list: {valid_timestamps}\n"
-                            f"Correct cell order list: {correct_cell_order}"
-                        )
-                
-                # Test remaining correct_cell_order items (should have n/a in response_time)
-                for list_idx in range(len(valid_timestamps), len(correct_cell_order)):
-                    correct_cell = correct_cell_order[list_idx]
-                    correct_cell_str = str(correct_cell)
-                    
-                    # Find output rows where this correct_cell appears in correct_cell column
-                    correct_cell_rows = output_df[output_df['correct_cell'].astype(str) == correct_cell_str]
-                    
-                    if len(correct_cell_rows) == 0:
-                        pytest.fail(
-                            f"Input file {input_file.name}, row {input_idx}: "
-                            f"Correct_cell {correct_cell_str} (index {list_idx} in correct_cell_order, "
-                            f"beyond valid_responses_timestamps length) does not appear in output.\n"
-                            f"Valid timestamps list: {valid_timestamps}\n"
-                            f"Correct cell order list: {correct_cell_order}"
-                        )
-                    
-                    # Check that these rows have 'n/a' in response_time
-                    for _, row in correct_cell_rows.iterrows():
-                        response_time = str(row.get('response_time', ''))
-                        if response_time not in ['n/a', '']:
-                            pytest.fail(
-                                f"Input file {input_file.name}, row {input_idx}: "
-                                f"Correct_cell {correct_cell_str} (index {list_idx} in correct_cell_order, "
-                                f"beyond valid_responses_timestamps length) appears with response_time '{response_time}' "
-                                f"instead of 'n/a'.\n"
-                                f"Valid timestamps list: {valid_timestamps}\n"
-                                f"Correct cell order list: {correct_cell_order}"
-                            )
-    
     def test_simple_span_test_trial_response_time_ordering(self):
         """
         Test that sequential clusters of test_trial rows with non-n/a response_time 
@@ -1771,16 +1384,14 @@ class TestSimpleSpanColumnValidation:
                             f"Row {start + i + 1} response_time: {original_order[i + 1]}"
                         )
     
-    @pytest.mark.skip(reason="Disabled: Main TSV files no longer contain valid_cell_selection and invalid_cell_selection columns - unfurled data is in sidecar JSON files")
     def test_simple_span_accuracy_calculation(self):
         """
         Test that accuracy is calculated correctly for simpleSpan tasks.
         
         Rules:
-        - acc = 1.0 if valid_cell_selection == correct_cell
-        - acc = 0.0 if correct_cell != n/a and correct_cell != valid_cell_selection OR 
-          if either valid_cell_selection or invalid_cell_selection != n/a and not == correct_cell
-        - n/a otherwise
+        - acc = 1.0 if cell_selection == correct_cell (and neither is n/a)
+        - acc = 0.0 if cell_selection != correct_cell (and neither is n/a)
+        - acc = n/a if either cell_selection or correct_cell is n/a
         """
         from pathlib import Path
         
@@ -1798,34 +1409,32 @@ class TestSimpleSpanColumnValidation:
                 df = pd.read_csv(file_path, sep='\t', keep_default_na=False)
                 
                 # Check each row for correct accuracy calculation
-                for idx, row in df.iterrows():
-                    valid_cell_selection = str(row.get('valid_cell_selection', 'n/a'))
-                    invalid_cell_selection = str(row.get('invalid_cell_selection', 'n/a'))
+                # Only check span_recall rows (where accuracy is calculated)
+                span_recall_mask = df['trial_type'] == 'span_recall'
+                span_recall_rows = df[span_recall_mask]
+                
+                for idx, row in span_recall_rows.iterrows():
+                    cell_selection = str(row.get('cell_selection', 'n/a'))
                     correct_cell = str(row.get('correct_cell', 'n/a'))
                     actual_acc = row.get('acc', 'n/a')
                     
                     # Normalize values (handle NaN, empty strings, etc.)
-                    if valid_cell_selection in ['nan', '', 'None']:
-                        valid_cell_selection = 'n/a'
-                    if invalid_cell_selection in ['nan', '', 'None']:
-                        invalid_cell_selection = 'n/a'
+                    if cell_selection in ['nan', '', 'None']:
+                        cell_selection = 'n/a'
                     if correct_cell in ['nan', '', 'None']:
                         correct_cell = 'n/a'
                     
                     # Calculate expected accuracy based on rules
                     expected_acc = 'n/a'  # Default
                     
-                    # Rule 1: acc = 1.0 if valid_cell_selection == correct_cell
-                    if valid_cell_selection == correct_cell and valid_cell_selection != 'n/a':
+                    # Rule 1: acc = 1.0 if cell_selection == correct_cell (and neither is n/a)
+                    if cell_selection == correct_cell and cell_selection != 'n/a':
                         expected_acc = 1.0
-                    # Rule 2: acc = 0.0 if correct_cell != n/a and correct_cell != valid_cell_selection
-                    elif correct_cell != 'n/a' and correct_cell != valid_cell_selection:
+                    # Rule 2: acc = 0.0 if cell_selection != correct_cell (and neither is n/a)
+                    elif cell_selection != 'n/a' and correct_cell != 'n/a' and cell_selection != correct_cell:
                         expected_acc = 0.0
-                    # Rule 3: acc = 0.0 if either valid_cell_selection or invalid_cell_selection != n/a 
-                    # and not == correct_cell
-                    elif ((valid_cell_selection != 'n/a' or invalid_cell_selection != 'n/a') and 
-                          valid_cell_selection != correct_cell and invalid_cell_selection != correct_cell):
-                        expected_acc = 0.0
+                    # Rule 3: acc = n/a if either cell_selection or correct_cell is n/a
+                    # (already set as default)
                     
                     # Compare actual vs expected accuracy
                     # Normalize both values to handle type differences (e.g., 1.0 vs 1, '1.0' vs 1.0)
@@ -1845,8 +1454,7 @@ class TestSimpleSpanColumnValidation:
                     if actual_acc_normalized != expected_acc_normalized:
                         accuracy_issues.append(
                             f"{file_path.name} row {idx}: "
-                            f"valid_cell_selection='{valid_cell_selection}', "
-                            f"invalid_cell_selection='{invalid_cell_selection}', "
+                            f"cell_selection='{cell_selection}', "
                             f"correct_cell='{correct_cell}' -> "
                             f"expected acc={expected_acc}, actual acc={actual_acc}"
                         )
@@ -1858,9 +1466,8 @@ class TestSimpleSpanColumnValidation:
             error_msg = "simpleSpan accuracy calculation issues:\n\n"
             for issue in accuracy_issues:
                 error_msg += f"  {issue}\n"
-            error_msg += "\nAccuracy calculation rules:\n"
-            error_msg += "1. acc = 1.0 if valid_cell_selection == correct_cell\n"
-            error_msg += "2. acc = 0.0 if correct_cell != n/a and correct_cell != valid_cell_selection\n"
-            error_msg += "3. acc = 0.0 if either valid_cell_selection or invalid_cell_selection != n/a and not == correct_cell\n"
-            error_msg += "4. acc = n/a otherwise"
+            error_msg += "\nAccuracy calculation rules for span_recall rows:\n"
+            error_msg += "1. acc = 1.0 if cell_selection == correct_cell (and neither is n/a)\n"
+            error_msg += "2. acc = 0.0 if cell_selection != correct_cell (and neither is n/a)\n"
+            error_msg += "3. acc = n/a if either cell_selection or correct_cell is n/a"
             pytest.fail(error_msg)

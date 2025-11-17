@@ -111,6 +111,8 @@ def process_span_data(df, task_name, include_movements=True):
     for idx, row in df.iterrows():
         # Clear correct_cell at the start of processing each row to prevent carrying over old values
         row = row.copy()
+        # Add source index to track which input row each expanded row came from
+        row['_source_input_idx'] = idx
         if task_name == 'opSpan':
             row['correct_cell'] = 'n/a'
         
@@ -225,12 +227,14 @@ def process_span_data(df, task_name, include_movements=True):
                             new_row['valid_responses_timestamps'] = ''
                             
                         # Clear and set columns appropriately
+                        # Preserve correct_cell_order for partial_acc calculation
                         new_row['moving_through_grid_timestamps'] = ''
                         new_row['cell_order_through_grid'] = ''
                         new_row['duplicate_responses'] = ''
                         new_row['duplicate_responses_timestamps'] = ''
                         new_row['extra_responses'] = ''
                         new_row['extra_responses_timestamps'] = ''
+                        # Keep correct_cell_order (don't clear it) - needed for partial_acc calculation
                         new_row['correct_cell'] = 'n/a'
                         new_row['cell_movement'] = 'n/a'
                     
@@ -252,6 +256,7 @@ def process_span_data(df, task_name, include_movements=True):
                         new_row['response_time'] = 'n/a'
                     
                     # Clear list columns and set non-relevant columns to n/a
+                    # Preserve correct_cell_order for partial_acc calculation
                     new_row['moving_through_grid_timestamps'] = ''
                     new_row['cell_order_through_grid'] = ''
                     new_row['valid_responses_timestamps'] = ''
@@ -260,7 +265,8 @@ def process_span_data(df, task_name, include_movements=True):
                     new_row['valid_responses'] = ''
                     new_row['duplicate_responses'] = ''
                     new_row['extra_responses'] = ''
-                    new_row['correct_cell_order'] = ''
+                    # Keep correct_cell_order (don't clear it) - needed for partial_acc calculation
+                    # new_row['correct_cell_order'] = ''  # REMOVED: preserve for partial_acc
                     new_row['correct_cell'] = 'n/a'
                     new_row['cell_movement'] = 'n/a'
                     
@@ -285,6 +291,7 @@ def process_span_data(df, task_name, include_movements=True):
                         new_row['response_time'] = 'n/a'
                 
                     # Clear list columns and set non-relevant columns to n/a
+                    # Preserve correct_cell_order for partial_acc calculation
                     new_row['moving_through_grid_timestamps'] = ''
                     new_row['cell_order_through_grid'] = ''
                     new_row['valid_responses_timestamps'] = ''
@@ -293,7 +300,8 @@ def process_span_data(df, task_name, include_movements=True):
                     new_row['valid_responses'] = ''
                     new_row['duplicate_responses'] = ''
                     new_row['extra_responses'] = ''
-                    new_row['correct_cell_order'] = ''
+                    # Keep correct_cell_order (don't clear it) - needed for partial_acc calculation
+                    # new_row['correct_cell_order'] = ''  # REMOVED: preserve for partial_acc
                     new_row['correct_cell'] = 'n/a'
                     new_row['cell_movement'] = 'n/a'
                 
@@ -369,23 +377,40 @@ def process_span_data(df, task_name, include_movements=True):
     result_df = pd.DataFrame(expanded_rows).reset_index(drop=True)
     
     # Handle correct_cell_order alignment after DataFrame creation
+    # Convert response_time to numeric once for all comparisons (handles "880" vs "880.0" format differences)
+    result_df['_rt_numeric'] = pd.to_numeric(result_df['response_time'], errors='coerce')
+    
     for idx, row in df.iterrows():
         correct_cell_order = parse_list_string(row.get('correct_cell_order', ''))
         valid_responses_timestamps = parse_list_string(row.get('valid_responses_timestamps', ''))
         
         if correct_cell_order and valid_responses_timestamps:
+            # Only search within rows that came from this same input row
+            source_rows = result_df[result_df['_source_input_idx'] == idx]
+            
             # Find rows that match this input row and align correct_cell items
             for i, cell_order_item in enumerate(correct_cell_order):
                 if i < len(valid_responses_timestamps):
-                    timestamp_value = str(valid_responses_timestamps[i])
-                    # Find rows with matching timestamp and cell_selection != 'n/a'
-                    matching_rows = result_df[
-                        (result_df['response_time'].astype(str) == timestamp_value) & 
-                        (result_df['cell_selection'].astype(str) != 'n/a')
+                    # Convert timestamp to numeric for comparison (handles "880" vs "880.0")
+                    try:
+                        timestamp_numeric = float(valid_responses_timestamps[i])
+                    except (ValueError, TypeError):
+                        continue
+                    
+                    # Find rows with matching timestamp (numeric comparison) within this input row's expanded rows
+                    # Only match rows with cell_selection_type == 'valid' to avoid matching movement rows
+                    matching_rows = source_rows[
+                        (source_rows['_rt_numeric'] == timestamp_numeric) & 
+                        (source_rows['cell_selection'].astype(str) != 'n/a') &
+                        (source_rows['cell_selection_type'].astype(str) == 'valid')
                     ]
+                    
                     if not matching_rows.empty:
                         # Set correct_cell for the first matching row
                         result_df.loc[matching_rows.index[0], 'correct_cell'] = str(cell_order_item)
+    
+    # Clean up temporary columns
+    result_df = result_df.drop(['_rt_numeric', '_source_input_idx'], axis=1)
     
     # Sort sequential clusters of test_trial rows by response_time
     result_df = _sort_test_trial_clusters_by_response_time(result_df)
