@@ -35,7 +35,9 @@ rdoc_fmri_events/
 │   ├── test_calculators.py         
 │   ├── test_event_structure.py     
 │   ├── test_processor_error_handling.py
-│   └── test_span_manipulations.py  
+│   ├── test_span_manipulations.py
+│   ├── test_span_sidecars.py       # Tests for span sidecar JSON files
+│   └── test_trigger_timing_difference.py  
 ├── setup.py                        # Package installation setup
 ├── requirements.txt                # Python dependencies
 ├── README.md                       # This documentation
@@ -77,9 +79,12 @@ rdoc_fmri_events/
 - **`span_manipulators.py`**: Span task data manipulation
   - `process_span_data()`: Unfurls compressed list data into individual event rows (used in sidecar JSON files only)
   - `calculate_opspan_trial_type()` / `calculate_simplespan_trial_type()`: Maps trial_id to trial_type (used in both main TSV and sidecar JSON files)
-  - `calculate_span_recall_acc()`: Calculates accuracy for span_recall rows by comparing lists (used in main TSV files only)
-  - `calculate_partial_acc()`: Calculates partial accuracy (0.25 per correct response respective of order) (used in main TSV files only)
-  - `find_consecutive_sequences()`: Identifies consecutive sequences for recalculation (used in sidecar JSON files only)
+  - `calculate_span_recall_acc()`: Calculates accuracy for span_recall rows by comparing correct_cell and cell_selection (used in main TSV files only)
+  - `calculate_operation_acc()`: Calculates accuracy for operation rows by comparing correct_response and response (used in main TSV files only)
+  - `calculate_partial_acc()`: Calculates partial accuracy (1.00 if cell_selection is in correct_cell_order list, 0.00 otherwise) (used in both main TSV and sidecar JSON files)
+  - `calculate_span_recall_duration()`: Calculates duration for span_recall rows based on response_time (used in main TSV files only)
+  - `add_terminal_span_recall_row()`: Adds terminal rows after each span_recall sequence (used in main TSV files only). The terminal row's `correct_cell` is populated from `correct_cell_order` only if the sequence length is less than 4; otherwise `correct_cell` remains 'n/a'.
+  - `find_consecutive_sequences()`: Identifies consecutive sequences for recalculation (used in both main TSV and sidecar JSON files)
   - `recalculate_onsets_for_sequences()`: Recalculates onsets within sequences using response times (used in sidecar JSON files only)
 
 
@@ -171,7 +176,7 @@ Event files follow a consistent column ordering:
 
 ### Span Sidecar JSON Files
 
-For `opSpan` and `simpleSpan` tasks, the processor creates additional JSON sidecar files in the `span_sidecar/` directory. These files contain unfurled `span_recall` events grouped by trial.
+For `opSpan` and `simpleSpan` tasks, the processor creates additional JSON sidecar files in the `span_sidecar/` directory. These files contain the complete unfurled `span_recall` events (including each movement around the grid and its timestamp) grouped by trial.
 
 **File naming**: `sub-{subject}_ses-{session}_task-{task}_desc-unfurledResponses_run-1_events.json`
 
@@ -187,10 +192,11 @@ For `opSpan` and `simpleSpan` tasks, the processor creates additional JSON sidec
       "onset": 24.658,
       "span_recall_rows": [
         {
-          "event_type": "movement|valid_response|invalid_response|selection",
-          "cell": "5",
-          "correct_cell": "5",
-          "acc": "1.0",
+          "event_type": "movement|valid_response|invalid_response|",
+          "cell": 5,
+          "correct_cell": 5,
+          "acc": 1.0,
+          "partial_acc": 1.0,
           "valid": 1.0,
           "extra": 0.0,
           "duplicate": 0.0,
@@ -208,16 +214,17 @@ For `opSpan` and `simpleSpan` tasks, the processor creates additional JSON sidec
 - `trial`: Trial number (1-indexed)
 - `onset`: Trial onset from the main events file (corresponding `test_trial` row onset)
 - `span_recall_rows`: Array of all unfurled span_recall events for this trial
-  - `event_type`: "movement" (cell_movement present), "valid_response" (valid_cell_selection), "invalid_response" (invalid_cell_selection), or "selection" (neither)
-  - `cell`: Combined cell value from either cell_movement or cell_selection (whichever is present)
-  - `correct_cell`: The correct cell value for this position
-  - `acc`: Accuracy (1.0/0.0/n/a)
-  - `valid`: 1.0 if from valid_responses, 0.0 if from duplicate/extra, null if movement
+  - `event_type`: "movement" (from moving_through_grid_timestamps), "valid_response", or "invalid_response" (duplicate or extra responses)
+  - `cell`: Combined cell value from either cell_movement or cell_selection (whichever is present), converted to integer
+  - `correct_cell`: The correct cell value for this position, converted to integer (null if not available)
+  - `acc`: Accuracy (1.0 if cell == correct_cell, 0.0 if cell != correct_cell, null if either is null), converted to float
+  - `partial_acc`: Partial accuracy (1.0 if cell_selection is in correct_cell_order list, 0.0 otherwise, null for movement or invalid_response rows), converted to float
+  - `valid`: 1.0 if event_type is valid_response, 0.0 if invalid_response, null if movement
   - `extra`: 1.0 if invalid response from extra_responses, 0.0 otherwise, null if movement
   - `duplicate`: 1.0 if invalid response from duplicate_responses, 0.0 otherwise, null if movement
-  - `response_time`: Response time in seconds
+  - `response_time`: Response time in seconds, converted to float
 
-**Note**: These JSON files contain the fully unfurled and recalculated span_recall events with precise timing, while the main TSV files contain the original unfurled data.
+**Note**: These JSON files contain the fully unfurled span_recall events with recalculated onsets based on response_time, while the main TSV files contain unfurled data with original onsets normalized to trigger start.
 
 ## Supported Tasks
 
