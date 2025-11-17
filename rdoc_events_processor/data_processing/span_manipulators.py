@@ -469,25 +469,30 @@ def recalculate_onsets_for_sequences(event_df, sequences_found, response_time_co
                 
                 # Unified algorithm for both opSpan and simpleSpan
                 # response_time is already in seconds (converted upfront)
+                # Onset calculation: onset[i] = onset[i-1] + duration[i-1]
                 if j == seq_start:
                     # First row in sequence: Keep its normalized onset unchanged (don't modify)
                     pass
                 elif j == seq_start + 1:
-                    # Second row in sequence: onset[i+1] = onset[i] + response_time[i]
+                    # Second row in sequence: onset[i] = onset[i-1] + duration[i-1]
+                    # For first row, duration = response_time (in seconds)
                     rt_prev = pd.to_numeric(response_time_col.iloc[j - 1], errors='coerce')
                     if pd.notna(rt_prev):
-                        # response_time is already in seconds
-                        new_onset = prev_onset_updated + rt_prev
+                        # response_time is already in seconds, and for first row duration = response_time
+                        prev_duration_seconds = rt_prev
+                        new_onset = prev_onset_updated + prev_duration_seconds
                         event_df.loc[j, 'onset'] = round(new_onset, float_precision)
                         rows_modified += 1
                 else:
-                    # Subsequent rows: onset[i] = onset[i-1] + (response_time[i] - response_time[i-1])
-                    rt_current = pd.to_numeric(response_time_col.iloc[j], errors='coerce')
+                    # Subsequent rows: onset[i] = onset[i-1] + duration[i-1]
+                    # duration[i-1] = response_time[i-1] - response_time[i-2]
                     rt_prev = pd.to_numeric(response_time_col.iloc[j - 1], errors='coerce')
+                    rt_prev_prev = pd.to_numeric(response_time_col.iloc[j - 2], errors='coerce')
                     
-                    if pd.notna(rt_current) and pd.notna(rt_prev):
-                        # response_time values are already in seconds
-                        new_onset = prev_onset_updated + (rt_current - rt_prev)
+                    if pd.notna(rt_prev) and pd.notna(rt_prev_prev):
+                        # Calculate previous row's duration: response_time[i-1] - response_time[i-2]
+                        prev_duration_seconds = rt_prev - rt_prev_prev
+                        new_onset = prev_onset_updated + prev_duration_seconds
                         event_df.loc[j, 'onset'] = round(new_onset, float_precision)
                         rows_modified += 1
     

@@ -37,6 +37,12 @@ def download_subject_data(subjects, remote_path, local_path, remote_name="dropbo
     """
     Download data for specified subjects from Dropbox.
     
+    Automatically excludes the following folders:
+    - pretouch
+    - anat
+    - prescan
+    - practice
+    
     Args:
         subjects (list): List of subject IDs (e.g., ['s4', 's5', 's6'])
         remote_path (str): Remote path in Dropbox
@@ -57,13 +63,18 @@ def download_subject_data(subjects, remote_path, local_path, remote_name="dropbo
         local_subject_path.mkdir(parents=True, exist_ok=True)
         
         # Download subject data
+        # Exclude pretouch, anat, prescan, and practice folders
         command = [
             "rclone", "copy",
             remote_subject_path,
             str(local_subject_path),
             "--progress",
             "--transfers", "4",
-            "--checkers", "8"
+            "--checkers", "8",
+            "--exclude", "**/pretouch/**",
+            "--exclude", "**/anat/**",
+            "--exclude", "**/prescan/**",
+            "--exclude", "**/practice/**"
         ]
         
         try:
