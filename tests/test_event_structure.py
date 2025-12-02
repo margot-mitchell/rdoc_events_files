@@ -344,7 +344,17 @@ class TestEventStructure:
         
         This verifies that the previous row's duration correctly predicts when the current row starts.
         Calculation: (onset(i) - onset(i-1)) - duration(i-1)
-        Tolerance: ±100ms (0.1 seconds)
+        
+        Tolerance:
+        - For trial pairs where trial_id(prev) = 'stim':
+          - ±200ms (0.2 seconds) for: s4, s5, s6, s8 (all sessions), s11 sessions 1-8, 
+            s14 sessions 1-6, s19 sessions 1-3, s20 sessions 1-3
+          - ±100ms (0.1 seconds) for all other subjects/sessions
+        - For all other trial pairs: ±100ms (0.1 seconds)
+        
+        Note: The 200ms tolerance is for subjects who were affected by jspysch latency issues,
+        which was corrected in expfactory code in October 2025, after which the unintended
+        discrepancies were no longer a problem.
         
         Note: Skips the exit_fullscreen row (always last row) since it has no next row to check.
         Skips pairs where the first row's trial_id is 'fixation_cross', 'fmri_wait_block_trigger_end', 
@@ -391,17 +401,24 @@ class TestEventStructure:
             
             # Determine if this subject/session should skip certain trial_ids
             should_skip_trial_ids = False
+            # Determine if this subject/session is in the special group (uses 200ms threshold for stim pairs)
+            is_special_group = False
             if subject in ['s4', 's5', 's6', 's8']:
                 # All sessions for these subjects
                 should_skip_trial_ids = True
+                is_special_group = True
             elif subject == 's11' and session is not None and 1 <= session <= 8:
                 should_skip_trial_ids = True
+                is_special_group = True
             elif subject == 's19' and session is not None and 1 <= session <= 3:
                 should_skip_trial_ids = True
+                is_special_group = True
             elif subject == 's20' and session is not None and 1 <= session <= 3:
                 should_skip_trial_ids = True
+                is_special_group = True
             elif subject == 's14' and session is not None and 1 <= session <= 6:
                 should_skip_trial_ids = True
+                is_special_group = True
             
             file_misalignments = []
             
@@ -441,8 +458,17 @@ class TestEventStructure:
                 # Convert duration from milliseconds to seconds
                 duration_seconds = duration_previous / 1000.0
                 
-                # Check if they're roughly equal (within 100ms tolerance)
-                tolerance = 0.1  # seconds
+                # Determine tolerance based on subject/session and trial_id
+                # For stim pairs: use 200ms for special group, 100ms for others
+                # For all other pairs: use 100ms
+                if trial_id_previous == 'stim':
+                    if is_special_group:
+                        tolerance = 0.2  # 200ms for special group stim pairs
+                    else:
+                        tolerance = 0.1  # 100ms for other stim pairs
+                else:
+                    tolerance = 0.1  # 100ms for all other pairs
+                
                 difference = abs(onset_diff - duration_seconds)
                 
                 if difference > tolerance:
@@ -476,7 +502,7 @@ class TestEventStructure:
             
             if total_files > 20:
                 error_msg += f"  ... and {total_files - 20} more files\n"
-            error_msg += "\nDuration should represent time until next event (tolerance: ±100ms)"
+            error_msg += "\nDuration should represent time until next event (tolerance: ±100ms for most pairs, ±200ms for stim pairs in special group)"
             pytest.fail(error_msg)
     
     def test_trigger_end_first_row_onset_difference(self):
