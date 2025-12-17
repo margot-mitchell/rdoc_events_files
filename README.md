@@ -128,11 +128,11 @@ The package expects BIDS format data organized as follows:
 ```
 input_directory/
 ├── sub-s4/
-│   ├── ses-1/
+│   ├── ses-01/
 │   │   └── func/
-│   │       ├── sub-s4_ses-1_task-go_nogo_run-1_rdoc__fmri.csv
-│   │       └── sub-s4_ses-1_task-flanker_run-1_rdoc__fmri.csv
-│   └── ses-2/
+│   │       ├── sub-s4_ses-01_task-go_nogo_run-1_rdoc__fmri.csv
+│   │       └── sub-s4_ses-01_task-flanker_run-1_rdoc__fmri.csv
+│   └── ses-02/
 │       └── func/
 │           └── ...
 └── sub-s5/
@@ -286,7 +286,7 @@ rdoc-download --subjects s4 s5 s6
 rdoc-download --subjects s4 s5 --remote-path "rdoc_fmri_behavior/output/bids" --local-path "dropbox_bids"
 
 # Use custom rclone remote name
-rdoc-download --subjects s4 s5 --remote-name "my_dropbox"
+rdoc-download --subjects s4 s5 --remote-name "rdoc_dropbox"
 
 # Enable verbose output
 rdoc-download --subjects s4 s5 --verbose

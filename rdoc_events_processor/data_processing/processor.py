@@ -1262,7 +1262,9 @@ class EventFileProcessor:
                         continue
                     
                     # Create output directory for this subject and session
-                    subject_output_dir = Path(output_dir) / f"sub-{subject_id}" / f"ses-{session_id}"
+                    # Zero-pad session number to 2 digits (e.g., "8" -> "08", "10" -> "10")
+                    session_padded = session_id.zfill(2)
+                    subject_output_dir = Path(output_dir) / f"sub-{subject_id}" / f"ses-{session_padded}"
                     subject_output_dir.mkdir(parents=True, exist_ok=True)
                     
                     # Process each valid CSV file
@@ -1273,11 +1275,11 @@ class EventFileProcessor:
                         # Load data
                         data = load_csv_as_dataframe(csv_file)
                         if data is not None:
-                            # Create output filename without zero-padding
+                            # Create output filename with zero-padded session number
                             # Extract just the number from subject_id (e.g., "s4" -> "4")
                             subject_num = subject_id.replace('s', '') if subject_id.startswith('s') else subject_id
                             subject_str = f"s{subject_num}"  # No zero-padding
-                            session_str = session_id  # No zero-padding
+                            session_str = session_padded  # Zero-padded to 2 digits
                             output_filename = f"sub-{subject_str}_ses-{session_str}_task-{task_name}_run-1_events.tsv"
                             output_path = subject_output_dir / output_filename
                             
