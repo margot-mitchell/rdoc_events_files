@@ -1262,10 +1262,24 @@ class EventFileProcessor:
                         continue
                     
                     # Create output directory for this subject and session
-                    # Zero-pad session number to 2 digits (e.g., "8" -> "08", "10" -> "10")
-                    session_padded = session_id.zfill(2)
-                    subject_output_dir = Path(output_dir) / f"sub-{subject_id}" / f"ses-{session_padded}"
-                    subject_output_dir.mkdir(parents=True, exist_ok=True)
+                    # Zero-pad session number to 2 digits (e.g., "8" -> "08", "4makeup" -> "04makeup")
+                    # Extract leading numeric digits, pad them, then append any remaining suffix
+                    leading_digits = ''
+                    suffix = ''
+                    for i, char in enumerate(session_id):
+                        if char.isdigit():
+                            leading_digits += char
+                        else:
+                            suffix = session_id[i:]
+                            break
+                    else:
+                        # All characters were digits
+                        leading_digits = session_id
+                    # Pad the numeric part to 2 digits
+                    session_padded = leading_digits.zfill(2) + suffix
+                    session_output_dir = Path(output_dir) / f"sub-{subject_id}" / f"ses-{session_padded}"
+                    func_output_dir = session_output_dir / "func"
+                    func_output_dir.mkdir(parents=True, exist_ok=True)
                     
                     # Process each valid CSV file
                     for csv_file in valid_files:
@@ -1281,7 +1295,7 @@ class EventFileProcessor:
                             subject_str = f"s{subject_num}"  # No zero-padding
                             session_str = session_padded  # Zero-padded to 2 digits
                             output_filename = f"sub-{subject_str}_ses-{session_str}_task-{task_name}_run-1_events.tsv"
-                            output_path = subject_output_dir / output_filename
+                            output_path = func_output_dir / output_filename
                             
                             # Create event file (this will update stats for data issues)
                             success = self.create_event_file(data, output_path, task_name, subject_id, session_id)

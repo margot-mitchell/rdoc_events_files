@@ -283,7 +283,7 @@ The package provides two command-line interfaces:
 rdoc-download --subjects s4 s5 s6
 
 # Specify custom remote path and local directory
-rdoc-download --subjects s4 s5 --remote-path "rdoc_fmri_behavior/output/bids" --local-path "dropbox_bids"
+rdoc-download --subjects s4 s5 --remote-name "rdoc_dropbox" --local-path "dropbox_bids"
 
 # Use custom rclone remote name
 rdoc-download --subjects s4 s5 --remote-name "rdoc_dropbox"

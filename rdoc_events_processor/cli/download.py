@@ -120,8 +120,8 @@ def main():
     
     parser.add_argument(
         "--remote-path",
-        default="RDOC_fMRI_Events",
-        help="Remote path in Dropbox (default: RDOC_fMRI_Events)"
+        default="rdoc_fmri_behavior/output/bids",
+        help="Remote path in Dropbox (default: rdoc_fmri_behavior/output/bids)"
     )
     
     parser.add_argument(
